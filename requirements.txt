@@ -1,5 +1,5 @@
 torch
-nvidia-vfx
+nvidia-vfx; platform_machine != "aarch64"  # shared-comfyui-patch:aarch64-nvidia-vfx
 Pillow
 numpy
 transformers>=4.45.0
