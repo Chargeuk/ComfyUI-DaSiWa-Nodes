@@ -48,8 +48,9 @@ def video_options(codec, encoder, quality):
         return {"crf": q, "b": "0", "cpu-used": "6"}
     if encoder == "libvpx-vp9":
         return {"crf": q, "b": "0", "deadline": "good"}
-    if encoder == "libwebp_anim":
-        return {"loop": "0", "q": q}
+    if encoder in {"libwebp_anim", "libwebp"}:
+        # libwebp quality runs 100 (best) -> 0; map the shared 0 (best) -> 51 CRF-style slider onto it.
+        return {"quality": str(round(100 - min(int(quality), 51) * 100 / 51))}
     return {}
 
 
@@ -64,7 +65,7 @@ def _is_second_boundary(index, rate):
 
 
 def _video_frame(array, index, rate, bit_depth, force_keyframe=True):
-    frame = av.VideoFrame.from_ndarray(array, format="rgb48le" if bit_depth == 10 else "rgb24")
+    frame = av.VideoFrame.from_ndarray(array, format="rgb48le" if bit_depth == 10 else "rgba" if array.shape[-1] == 4 else "rgb24")
     frame.pts = index
     frame.time_base = Fraction(rate.denominator, rate.numerator)
     if force_keyframe and _is_second_boundary(index, rate):
@@ -82,7 +83,7 @@ def _hardware_accel(encoder):
     return av.codec.hwaccel.HWAccel(**kwargs)
 
 
-def _configure_video_stream(container, encoder, width, height, frame_rate, bit_depth, quality):
+def _configure_video_stream(container, encoder, width, height, frame_rate, bit_depth, quality, alpha=False):
     kwargs = {"rate": _rate(frame_rate), "options": video_options("", encoder, quality)}
     hwaccel = _hardware_accel(encoder)
     if hwaccel is not None:
@@ -92,7 +93,7 @@ def _configure_video_stream(container, encoder, width, height, frame_rate, bit_d
     stream.height = height
     stream.codec_context.gop_size = max(1, math.ceil(float(_rate(frame_rate))))
     if hwaccel is None:
-        stream.pix_fmt = "yuv420p10le" if bit_depth == 10 else "yuv420p"
+        stream.pix_fmt = "yuva420p" if alpha else "yuv420p10le" if bit_depth == 10 else "yuv420p"
     else:
         device_type = device_type_for_encoder(encoder)
         codec = av.Codec(encoder, "w")
@@ -121,6 +122,8 @@ def _audio_rate(encoder, source_rate):
     rates = sorted(codec.audio_rates or [])
     if not rates:
         return source_rate
+    if encoder == "libopus" and source_rate == 32000 and 48000 in rates:
+        return 48000  # Opus decodes at 48 kHz; avoid a lossy 32 -> 24 -> 48 kHz path.
     return min(rates, key=lambda candidate: abs(candidate - source_rate))
 
 
@@ -132,27 +135,78 @@ def _configure_audio_stream(container, encoder, source_rate, channels, bitrate):
     return stream, target_rate
 
 
+def segment_sample_interval(interval, sample_rate):
+    if not isinstance(interval, dict) or set(interval) != {"start", "end"}:
+        raise ValueError("Invalid H3 segment audio interval.")
+    bounds = []
+    for key in ("start", "end"):
+        pair = interval[key]
+        if (not isinstance(pair, (tuple, list)) or len(pair) != 2
+                or any(type(value) is not int for value in pair) or pair[0] < 0 or pair[1] <= 0):
+            raise ValueError("H3 segment audio boundaries must be nonnegative rational times.")
+        bounds.append(Fraction(*pair))
+    start, end = bounds
+    if end <= start:
+        raise ValueError("H3 segment audio interval must have positive duration.")
+    return round(end * sample_rate) - round(start * sample_rate)
+
+
 def _encode_audio(container, stream, audio, target_rate):
-    waveform, source_rate = audio
+    waveform, source_rate = audio[:2]
+    expected = None
+    if len(audio) == 3:
+        interval = audio[2]
+        if waveform.shape[1] != segment_sample_interval(interval, source_rate):
+            raise ValueError("H3 segment audio length differs from its source sample interval.")
+        expected = segment_sample_interval(interval, target_rate)
     channels = waveform.shape[0]
     layout = _audio_layout(channels)
     codec_formats = [fmt.name for fmt in (av.Codec(stream.codec_context.name, "w").audio_formats or [])]
     target_format = codec_formats[0] if codec_formats else "fltp"
     resampler = av.AudioResampler(format=target_format, layout=layout, rate=target_rate, frame_size=stream.codec_context.frame_size or 1024)
-    offset = 0
-    for start in range(0, waveform.shape[1], 32768):
-        chunk = np.ascontiguousarray(waveform[:, start:start + 32768], dtype=np.float32)
-        frame = av.AudioFrame.from_ndarray(chunk, format="fltp", layout=layout)
-        frame.sample_rate = source_rate
-        frame.pts = offset
-        frame.time_base = Fraction(1, source_rate)
-        offset += frame.samples
-        for converted in resampler.resample(frame):
-            for packet in stream.encode(converted):
-                container.mux(packet)
-    for converted in resampler.resample(None):
+    def converted_frames():
+        for start in range(0, waveform.shape[1], 32768):
+            chunk = np.ascontiguousarray(waveform[:, start:start + 32768], dtype=np.float32)
+            frame = av.AudioFrame.from_ndarray(chunk, format="fltp", layout=layout)
+            frame.sample_rate = source_rate
+            frame.pts = start
+            frame.time_base = Fraction(1, source_rate)
+            yield from resampler.resample(frame)
+        yield from resampler.resample(None)
+
+    total = written = 0
+    converted = None
+    for converted in converted_frames():
+        total += converted.samples
+        if expected is not None:
+            keep = min(converted.samples, max(0, expected - written))
+            if not keep:
+                continue
+            if keep != converted.samples:
+                array = converted.to_ndarray()
+                stride = 1 if converted.format.is_planar else channels
+                converted = av.AudioFrame.from_ndarray(np.ascontiguousarray(array[:, :keep * stride]), format=target_format, layout=layout)
+            converted.sample_rate = target_rate
+            converted.pts = written
+            converted.time_base = Fraction(1, target_rate)
+        written += converted.samples
         for packet in stream.encode(converted):
             container.mux(packet)
+    if expected is not None:
+        # Only global-grid rounding plus at most one resampler sample may differ.
+        resampled = Fraction(waveform.shape[1] * target_rate, source_rate)
+        if converted is None or abs(total - round(resampled)) > 1 or abs(total - expected) > math.ceil(Fraction(target_rate, source_rate)):
+            raise ValueError("H3 segment resampled audio differs meaningfully from its exact interval.")
+        if written < expected:
+            planar = av.AudioFormat(target_format).is_planar
+            dtype = converted.to_ndarray().dtype
+            shape = (channels, expected - written) if planar else (1, (expected - written) * channels)
+            padding = av.AudioFrame.from_ndarray(np.zeros(shape, dtype=dtype), format=target_format, layout=layout)
+            padding.sample_rate = target_rate
+            padding.pts = written
+            padding.time_base = Fraction(1, target_rate)
+            for packet in stream.encode(padding):
+                container.mux(packet)
     for packet in stream.encode(None):
         container.mux(packet)
 
@@ -162,14 +216,14 @@ def _metadata(container, metadata):
         container.metadata[str(key)] = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
-def encode_attempt(output_path, container_name, encoder, width, height, frame_rate, bit_depth, quality, frames, metadata=None, audio=None, audio_encoder=None, audio_bitrate="192k", crop_to_audio=False, progress_callback=None):
+def encode_attempt(output_path, container_name, encoder, width, height, frame_rate, bit_depth, quality, frames, metadata=None, audio=None, audio_encoder=None, audio_bitrate="192k", crop_to_audio=False, progress_callback=None, alpha=False):
     attempt = f"{output_path}.attempt-{uuid.uuid4().hex}"
     container = None
     try:
-        options = {"movflags": "+faststart+use_metadata_tags"} if container_name == "MP4" else {}
+        options = {"MP4": {"movflags": "+faststart+use_metadata_tags"}, "Animated WebP": {"loop": "0"}}.get(container_name, {})
         container = av.open(attempt, "w", format=FORMAT_NAMES[container_name], options=options)
         _metadata(container, metadata)
-        video = _configure_video_stream(container, encoder, width, height, frame_rate, bit_depth, quality)
+        video = _configure_video_stream(container, encoder, width, height, frame_rate, bit_depth, quality, alpha)
         audio_stream = None
         target_audio_rate = None
         if audio is not None and audio_encoder:

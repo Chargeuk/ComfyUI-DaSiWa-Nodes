@@ -2,7 +2,7 @@
 
 DaSiWa Enhanced Video Combine converts a ComfyUI `IMAGE` batch into a video, optionally muxes a connected `AUDIO` value, and provides an in-node playback preview after execution. Its enhanced automations select a usable codec, container, encoder, precision, browser-preview path, and generated-asset payload at runtime.
 
-Click the small `?` at the right of the node title for the same concise in-app reference.
+Click **Help** beside the preview controls for the concise in-app reference in either renderer, including Nodes 2.0. The classic renderer also retains the small `?` at the right of the node title.
 
 ## Quick start
 
@@ -12,12 +12,19 @@ Click the small `?` at the right of the node title for the same concise in-app r
 4. Optionally enable **Save first frame** and/or **Save last frame**.
 5. Run the workflow. The node returns the generated file path and, when enabled, the input frame batch for downstream nodes.
 
+```mermaid
+flowchart LR
+    VD[VAE Decode<br>or sampler] -->|IMAGE batch| EVC[Enhanced Video Combine<br>codec: Auto, container: Auto]
+    AL[Audio Loader<br>/ VAE Decode] -->|AUDIO| EVC
+    EVC --> out((filename + path))
+```
+
 ## Enhanced automations
 
 The node is deliberately designed to avoid fixed, host-specific video settings:
 
 - **Audio output uniqueness (fix):** Audio sidecar files were named `video_00001-audio.mp4` (dash), making the counter unparseable by `folder_paths.get_save_image_path`, which expected an underscore after the prefix. Every audio save therefore overwrote the previous one. The separator is now an underscore (`video_00001_audio.mp4`, `video_00002_audio.mp4`, …) so the counter increments correctly.
-- **Codec and encoder selection:** `Auto` tests browser-compatible 8-bit AV1/WebM first, then VP9, then H.264. H.265/HEVC is excluded from Auto and must be chosen explicitly. For each candidate the node prefers NVIDIA NVENC, then Intel QSV, AMD AMF, VAAPI, and finally a software encoder. An advertised FFmpeg encoder is not trusted until an actual encode attempt succeeds.
+- **Codec and encoder selection:** `Auto` tests browser-compatible 8-bit AV1/MP4 first, then VP9/WebM, then H.264/MP4. H.265/HEVC is excluded from Auto and must be chosen explicitly. For each candidate the node prefers NVIDIA NVENC, then Intel QSV, AMD AMF, VAAPI, and finally a software encoder. An advertised FFmpeg encoder is not trusted until an actual encode attempt succeeds.
 - **PyAV-native execution:** The node uses PyAV 18 and the FFmpeg libraries bundled in its wheel for video encoding, audio muxing, metadata, animated outputs, and preview transcoding. It never launches an `ffmpeg` executable. Hardware candidates are runtime-tested in the existing NVENC → QSV → AMF → VAAPI order; an unavailable device or failed session continues to the next candidate and ultimately to the codec's software encoder.
 - **Container safety:** Auto tries compatible container sequences for each codec and prevents an incompatible preference from being the only path. If all selected candidates fail, it attempts the mandatory H.264/MP4 fallback.
 - **Source precision:** with an explicit codec, `bit_depth=Auto` detects 8-bit versus 10-bit image-batch quantization. Browser-compatible codec `Auto` always emits 8-bit 4:2:0.
@@ -43,16 +50,30 @@ Selecting a specific codec keeps that codec preference, but still uses its hardw
 
 ### Container
 
-With `container=Auto`:
+With both `codec=Auto` and `container=Auto`, the codec candidates are AV1/MP4 → VP9/WebM → H.264/MP4.
 
-- AV1 and VP9: WebM, then MKV, then MP4.
+With an explicit codec and `container=Auto`:
+
+- AV1: MP4 (faststart), then WebM, then MKV.
+- VP9: WebM, then MKV, then MP4.
 - H.264 and H.265: MP4, then MKV.
+
+An explicitly selected container stays selected; this does not force saved WebM/MKV workflows to MP4.
 
 If every requested combination fails, the node attempts its mandatory H.264/MP4 fallback.
 
 ### Animated image outputs
 
 Select **Animated WebP** or **Animated AVIF** explicitly from `container` to write an animated image rather than a video container. Both choices are deliberately excluded from `codec=Auto` and `container=Auto` and ignore the `codec` dropdown. Animated AVIF runtime-tests AV1 encoders in GPU-first order (`av1_nvenc`, Intel QSV, AMD AMF, VAAPI), then falls back to `libsvtav1` or `libaom-av1`. Animated WebP requires the CPU `libwebp_anim` encoder; FFmpeg has no NVENC WebP encoder. Animated image formats cannot mux the connected `AUDIO` value, so the node logs that audio is omitted.
+
+### Transparency
+
+An `IMAGE` batch with four channels (RGBA, for example from the Qwen Image 2.1 VAE) keeps its alpha channel in two cases:
+
+- **Animated WebP:** encoded with the CPU `libwebp` encoder, because FFmpeg's `libwebp_anim` discards alpha.
+- **VP9 in WebM or MKV:** encoded with the CPU `libvpx-vp9` encoder in 8-bit `yuva420p`, even when 10-bit is selected. NVENC has no VP9 encoder, and the QSV/VAAPI VP9 encoders cannot write alpha. Chromium-based browsers play VP9 alpha transparently; the in-node preview is an H.264 transcode and shows the clip opaque.
+
+All other codecs and containers ignore the alpha channel. RGB batches encode exactly as before.
 
 ### Bit depth and quality
 
@@ -71,7 +92,7 @@ Connect a ComfyUI `AUDIO` value to mux it with the video.
 
 ## Preview and frame controls
 
-The completed video is shown inside a compact framed preview with source-native aspect ratio. Its native canvas player controls appear only while the pointer is over the video, and hide again when it leaves; there is no duplicate play button or timeline. Preview audio follows the same hover behavior. The framed row below the video holds Autoplay, Mute, and first/last-frame export controls. Autoplay and Mute are stored in the node properties, so both are saved with the workflow and restored on load.
+The completed video is shown inside a compact framed preview with source-native aspect ratio. Native player controls remain available on hover. A separate seek bar below the video supports clicking, dragging, and keyboard seeking without relying on the browser's embedded control hit-testing inside a zoomed node. **Fullscreen** or a double-click on the video opens the player in fullscreen; the native fullscreen control is enabled too. Preview audio follows the same hover behavior. The framed row below the video holds Autoplay, Mute, and first/last-frame export controls. Autoplay and Mute are stored in the node properties, so both are saved with the workflow and restored on load.
 
 `save_first_frame` and `save_last_frame` write the selected source frame as a native-resolution PNG beside the encoded video. The names retain the complete video basename, including the counter and optional audio marker:
 
@@ -87,9 +108,17 @@ video_00002-audio-last-frame.png
 
 No browser download or popup is used. The encoded video and each selected PNG are included in the `ui.images` payload, so all generated files appear in ComfyUI Assets.
 
-Many Chromium/Linux installations cannot decode H.265 in a canvas/video element (and can similarly misreport AV1 support while rendering 10-bit hardware streams as black). For H.265 and AV1 outputs, the node streams an FFmpeg-transcoded fragmented H.264 MP4 response; the requested output file is not changed and no preview file is created.
+Cached previews preserve the requested output: AV1, VP9, H.265, 10-bit, and other non-native outputs use a separate H.264/AAC MP4 in ComfyUI's temporary directory with HTTP byte-range support. Download always points to the original file.
 
 `pingpong` appends reverse interior frames, giving a seamless forward/reverse loop. `pass_frames` returns the encoded frame sequence instead of an empty `IMAGE` result.
+
+## Memory use on long videos
+
+Encoding converts one source frame at a time, including pingpong playback. It does not build a reversed full-batch copy for the encoder. Automatic bit-depth detection samples at most 250,000 values before CPU/float32 conversion, including non-contiguous inputs.
+
+With `pass_frames=false`, the empty output owns no source-frame storage. With `pass_frames=true`, the full output remains available downstream; pingpong additionally materializes the extended frame sequence.
+
+The complete upstream `IMAGE` batch still has to exist during encoding. For example, 75 seconds at 24 fps and 1920×1080 RGB float32 require about 41.7 GiB for the input alone. Upstream caches, models and latents can add to this. The optional `free_memory_if_needed` switch (default off) checks RAM headroom before encoding, at most every five seconds of wall-clock encoding time, and before materializing pingpong passthrough. Under pressure it requests native inactive-cache release, releasable pinned memory, then active-cache release, rechecking actual available RAM after each stage. Active eviction can remove reusable workflow caches and cause later recomputation; hooks depend on the installed ComfyUI cache configuration. It never globally offloads GPU models or frees live inputs. Workspace budgeting is a heuristic, not a guarantee against swapping. These measures reduce additional encoder allocations, not the underlying input size. Longer videos may still require bounded upstream generation/decoding across separate executions.
 
 ## Metadata and filenames
 
@@ -105,9 +134,9 @@ Example:
 
 ```text
 [DaSiWa Enhanced Video Combine] Encode 48f 1920x1080@24fps 8-bit; codec=Auto, container=Auto, audio=yes.
-[DaSiWa Enhanced Video Combine] Auto test: AV1/WebM.
-[DaSiWa Enhanced Video Combine] Encoded AV1/WebM via av1_nvenc; audio=libopus/192k -> video_00001-audio.webm.
-[DaSiWa Enhanced Video Combine] Output: .../video_00001-audio.webm (AV1, av1_nvenc, 8-bit).
+[DaSiWa Enhanced Video Combine] Auto test: AV1/MP4.
+[DaSiWa Enhanced Video Combine] Encoded AV1/MP4 via av1_nvenc; audio=aac/192k -> video_00001_audio.mp4.
+[DaSiWa Enhanced Video Combine] Output: .../video_00001_audio.mp4 (AV1, av1_nvenc, 8-bit).
 ```
 
 ## Troubleshooting

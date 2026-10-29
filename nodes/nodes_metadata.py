@@ -12,8 +12,12 @@ try:
 except ImportError:
     from helper_logging import log_dasiwa
 
-# Global cache for model hashes to avoid re-calculating large files
-_MODEL_HASH_CACHE = {}
+# Model hashes keyed by path|size|mtime, persisted in the user directory: hashing a 20+ GB model takes ~20 s.
+_MODEL_HASH_CACHE = None
+
+
+def _hash_cache_file():
+    return os.path.join(folder_paths.get_user_directory(), "dasiwa_model_hashes.json")
 
 METADATA_INPUT_DESCRIPTIONS = {
     "save_workflow": "Include the ComfyUI workflow JSON so the saved image can be loaded back into ComfyUI.",
@@ -140,22 +144,36 @@ class DaSiWa_MetadataImageSaver:
         return prefix
 
     def get_sha256(self, file_path):
+        global _MODEL_HASH_CACHE
         if not file_path or not os.path.exists(file_path):
             return None
-        
+
         stat = os.stat(file_path)
-        cache_key = (file_path, stat.st_mtime, stat.st_size)
-        
+        cache_key = f"{os.path.realpath(file_path)}|{stat.st_size}|{stat.st_mtime_ns}"
+        if _MODEL_HASH_CACHE is None:
+            try:
+                with open(_hash_cache_file(), encoding="utf-8") as f:
+                    _MODEL_HASH_CACHE = json.load(f)
+            except (OSError, ValueError):
+                _MODEL_HASH_CACHE = {}
         if cache_key in _MODEL_HASH_CACHE:
             return _MODEL_HASH_CACHE[cache_key]
-            
+
         hash_sha256 = hashlib.sha256()
         with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
+            for chunk in iter(lambda: f.read(1 << 20), b""):
                 hash_sha256.update(chunk)
-        
+
         h = hash_sha256.hexdigest()
         _MODEL_HASH_CACHE[cache_key] = h
+        # shortcut: entries of replaced/deleted files are never pruned; prune if the file ever grows noticeably.
+        path = _hash_cache_file()
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(_MODEL_HASH_CACHE, f)
+            os.replace(path + ".tmp", path)
+        except OSError as e:
+            log_dasiwa("Metadata Image Saver", f"model hash cache not saved: {e}")
         return h
 
     def resolve_value(self, workflow_prompt, value, search_keys=None):
@@ -265,6 +283,7 @@ class DaSiWa_MetadataImageSaver:
         
         # Automatically detect LoRAs used in the workflow
         lora_strings = []
+        lora_hashes = {}
         current_node_id = None
         detected_vae_name = ""
         detected_clip_skip = 0
@@ -322,6 +341,11 @@ class DaSiWa_MetadataImageSaver:
                                     entry = f"<lora:{clean_name}:{l_strength}>"
                                     if entry not in lora_strings:
                                         lora_strings.append(entry)
+                                    # Civitai links LoRAs only by hash (A1111 "Lora hashes"), never by name.
+                                    lora_path = folder_paths.get_full_path("loras", l_name)
+                                    digest = self.get_sha256(lora_path) if lora_path else None
+                                    if digest and clean_name not in lora_hashes:
+                                        lora_hashes[clean_name] = digest[:10]
 
         results = list()
         saved_paths = []
@@ -461,7 +485,7 @@ class DaSiWa_MetadataImageSaver:
                 val = metadata_config.get(input_name)
             
             # 2. Fallback to the value passed to the function (manual override widgets)
-            # Filter out booleans and empty strings for text-based fields
+            # Filter out booleans and empty strings for text-based fields; 0 is the documented "prefer auto-detect" for numbers.
             if val in [None, ""] or isinstance(val, (list, dict, torch.Tensor, bool)):
                 if manual is not None and not isinstance(manual, (list, dict, torch.Tensor)):
                     # Boolean check: prevent 'False' strings in prompts
@@ -470,7 +494,7 @@ class DaSiWa_MetadataImageSaver:
                             val = None
                         else:
                             val = manual
-                    elif manual != "" or (cast_type is int and manual is not None):
+                    elif manual not in ("", 0):
                         val = manual
             
             # 3. Last fallback to detected or default if still invalid
@@ -529,6 +553,9 @@ class DaSiWa_MetadataImageSaver:
         
         if model_hash:
             base_params += f"Model hash: {model_hash}, "
+
+        if lora_hashes:
+            base_params += 'Lora hashes: "' + ", ".join(f"{name}: {digest}" for name, digest in lora_hashes.items()) + '", '
         
         for index, image in enumerate(images):
             # Convert tensor to PIL

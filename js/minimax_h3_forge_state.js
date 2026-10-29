@@ -1,0 +1,157 @@
+// Serialized reference intent and prompt fields shared by Director and Forge.
+const REF_KEYS = ["subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music"];
+const IMAGE_ROLES = ["subject", "style", "keyframe", "pose", "custom"];
+
+export function refPromptFields(text) {
+  const value = String(text || "").trim();
+  const matches = [...value.matchAll(/^[ \t]*(subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music|soundscape|music):[ \t]*/gmi)];
+  const keys = matches.map(m => m[1].toLowerCase()).map(key => key === "overall_soundscape" ? "soundscape" : key === "non_diegetic_music" ? "music" : key);
+  if (matches.length !== REF_KEYS.length || matches[0].index !== 0 || new Set(keys).size !== REF_KEYS.length) return null;
+  return Object.fromEntries(matches.map((m, i) => [keys[i], value.slice(m.index + m[0].length, matches[i + 1]?.index ?? value.length).trim()]));
+}
+
+export function refTemplate(text = "", definitions) {
+  const fields = refPromptFields(text);
+  if (fields && definitions === undefined) return text;
+  return REF_KEYS.map(key => `${key}:\n${key === "subject_definitions" ? definitions || "" : fields ? fields[key === "overall_soundscape" ? "soundscape" : key === "non_diegetic_music" ? "music" : key] : key === "detailed_description" ? String(text).trim() : ""}`).join("\n\n");
+}
+
+export function inheritedDefinitions(text, previous = {}, current = {}) {
+  let removed = false, rebuild = false;
+  const byIdentity = Object.fromEntries(Object.entries(current).map(([tag, identity]) => [identity, tag]));
+  const remap = value => String(value || "").replace(/<(Picture|Video|Audio)\s+(\d+)>/g, (tag, kind, n) => {
+    const identity = previous[`<${kind} ${Number(n)}>`];
+    const replacement = identity && byIdentity[identity];
+    if (replacement) return replacement;
+    removed = true;
+    return "";
+  });
+  const cleanDefinitions = value => String(value || "").split(/(?=^[ \t]*(?:[-*][ \t]+)?<(?:Subject|Picture|Video|Audio)\s+\d+>)/m)
+    .filter(block => {
+      const citations = [...block.matchAll(/<(Picture|Video|Audio)\s+(\d+)>/g)];
+      if (citations.some(([, kind, n]) => !byIdentity[previous[`<${kind} ${Number(n)}>`]])) {
+        removed = true;
+        if (citations.some(([, kind, n]) => current[`<${kind} ${Number(n)}>`])) rebuild = true;
+        return false;
+      }
+      return true;
+    }).map(remap).join("").trim();
+  const fields = refPromptFields(text);
+  const result = fields ? refTemplate(remap(text), cleanDefinitions(fields.subject_definitions)) : cleanDefinitions(text);
+  const warning = removed ? "Historical reference-bound descriptions were omitted where their identity mapping could not be verified. Unbound identities were kept." : "";
+  return { text: result.trim(), warning: rebuild ? `${warning} Current references remain enabled; Forge rebuilds their grounding from the current media and notes.` : warning };
+}
+
+export function referenceTags(references) {
+  // Native conditioning places paired video audio before standalone audio.
+  const counts = { Picture: 0, Video: 0, Audio: references.filter(r => r.kind === "video" && r.stream === "both" && !r.saved_reference).length };
+  let pairedAudio = 0;
+  return references.map(ref => {
+    const kinds = ref.kind === "image" ? ["Picture"] : ref.kind === "audio" ? ["Audio"] : ref.stream === "audio" ? ["Audio"] : ref.stream === "both" ? ["Video", "Audio"] : ["Video"];
+    return kinds.map(kind => `<${kind} ${kind === "Audio" && ref.kind === "video" && ref.stream === "both" && !ref.saved_reference ? ++pairedAudio : ++counts[kind]}>`);
+  });
+}
+
+export function referenceSnapshot(references) {
+  const result = {}, tags = referenceTags(references);
+  references.forEach((ref, index) => {
+    for (const tag of tags[index]) {
+      const kind = tag.slice(1).split(" ")[0];
+      result[tag] = `${ref.item?.id || ref.id || ""}:${typeof ref.item?.value === "string" ? ref.item.value : ref.path || ""}:${ref.item?.trim_start ?? 0}:${ref.item?.trim_end ?? ""}:${kind}`;
+    }
+  });
+  return result;
+}
+
+// REF2VA picture labels (item.forge_label): what each picture is, picked in
+// Forge. "character-2" is Character 2, "group-21" a picture with Characters
+// 2 and 1 in it (2 on the left), and the rest name themselves. Pictures with
+// the same Character number are one subject, which is what a subject group
+// was, so a label also sets the role and group the other paths read.
+export const PICTURE_LABELS = [...Array.from({ length: 32 }, (_, i) => `character-${i + 1}`), "group-12", "group-21", "group-13", "group-31",
+  "group-23", "group-32", "group-123", "place", "style", "first-frame", "last-frame", "pose", "custom"];
+
+export function labelRole(label) {
+  if (label.startsWith("character-")) return { forge_role: "subject", forge_subject_group: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[Number(label.slice(10)) - 1] || label };
+  const role = { style: "style", "first-frame": "keyframe", "last-frame": "keyframe", pose: "pose", custom: "custom" }[label] || "subject";
+  return { forge_role: role, forge_subject_group: "" };
+}
+
+// A picture never labelled gets one from its role and group: a group becomes
+// one Character number, and an ungrouped subject the next free one, which is
+// what "Separate" meant.
+function pictureLabels(images) {
+  const saved = new Map(images.filter(i => PICTURE_LABELS.includes(i.forge_label)).map(i => [i.id, i.forge_label]));
+  const used = new Set([...saved.values()].flatMap(v => v.startsWith("character-") ? [Number(v.slice(10))] : v.startsWith("group-") ? [...v.slice(6)].map(Number) : []));
+  const take = () => { let n = 1; while (used.has(n)) n += 1; used.add(n); return n; };
+  const byGroup = new Map(images.filter(i => i.group && saved.get(i.id)?.startsWith("character-")).map(i => [i.group, Number(saved.get(i.id).slice(10))]));
+  return Object.fromEntries(images.map(item => {
+    if (saved.has(item.id)) return [item.id, saved.get(item.id)];
+    const role = IMAGE_ROLES.includes(item.forge_role) ? item.forge_role : "subject";
+    if (role !== "subject") return [item.id, { style: "style", keyframe: "first-frame", pose: "pose", custom: "custom" }[role]];
+    const group = item.group;
+    if (group && !byGroup.has(group)) byGroup.set(group, take());
+    return [item.id, `character-${group ? byGroup.get(group) : take()}`];
+  }));
+}
+
+// What the Forge's picture buttons said beyond the single label: kinds that
+// combine ("character,place"), who is in it in tap order ("2,1") and which
+// way that order runs ("y" top to bottom, "z" front to back, "none" no order
+// picked; unset is left to right). Sent only when set, so a picture labelled
+// before the buttons sends exactly what it did.
+const BUTTON_KINDS = ["character", "place", "style", "first-frame", "last-frame", "pose", "custom"];
+const WHO_AXES = new Set(["y", "z", "none"]);
+export function pictureButtons(item) {
+  const kinds = String(item.forge_kinds || "").split(",").filter(k => BUTTON_KINDS.includes(k));
+  if (!kinds.length) return {};
+  const who = String(item.forge_who || "").split(",").map(Number).filter(n => Number.isInteger(n) && n >= 1 && n <= 32);
+  const axis = WHO_AXES.has(item.forge_who_axis) ? item.forge_who_axis : "";
+  return { picture_kinds: kinds, who, ...(axis ? { who_axis: axis } : {}) };
+}
+
+// I2VA / FL2VA / L2VA: a frame picture has no label, only who is in it, so
+// the brief's "Character 1" can say which person in the frame that is.
+export function frameWho(item) {
+  const who = String(item.forge_who || "").split(",").map(Number).filter(n => Number.isInteger(n) && n >= 1 && n <= 32);
+  if (!who.length) return {};
+  const axis = WHO_AXES.has(item.forge_who_axis) ? item.forge_who_axis : "";
+  return { who, ...(axis ? { who_axis: axis } : {}) };
+}
+
+// People boxes (item.forge_boxes, JSON): a box round each character in a
+// picture, [{ n, box: [x1, y1, x2, y2] }] as fractions of the picture. They say
+// who is in it, left to right, and where each one stands (nodes/h3_people.py).
+export const MAX_BOXES = 32;
+export function peopleBoxes(item) {
+  let raw;
+  try { raw = JSON.parse(item.forge_boxes || "[]"); } catch { return []; }
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set(), boxes = [];
+  for (const b of raw.slice(0, MAX_BOXES)) {
+    const n = Number(b?.n), box = Array.isArray(b?.box) ? b.box.map(Number) : [];
+    if (!Number.isInteger(n) || n < 1 || n > MAX_BOXES || seen.has(n) || box.length !== 4 || box.some(v => !Number.isFinite(v) || v < 0 || v > 1)) continue;
+    seen.add(n);
+    boxes.push({ n, box });
+  }
+  return boxes;
+}
+export const whoFromBoxes = boxes => [...boxes].sort((a, b) => (a.box[0] + a.box[2]) - (b.box[0] + b.box[2])).map(b => b.n);
+
+export function forgeReferences(items, mode, legacyGroups = {}) {
+  const order = { image: 0, video: 1, audio: 2 };
+  const sorted = items.filter(item => item.enabled !== false && item.value != null && order[item.type] !== undefined)
+    .slice().sort((a, b) => order[a.type] - order[b.type] || Number(a.slot ?? 0) - Number(b.slot ?? 0) || Number(a.order ?? 0) - Number(b.order ?? 0));
+  const labels = mode === "REF2VA" ? pictureLabels(sorted.filter(item => item.type === "image").map(item => ({ ...item, group: String(item.forge_subject_group ?? legacyGroups[item.id] ?? "") }))) : {};
+  return sorted
+    .map(item => {
+      const common = { item, instructions: String(item.forge_instructions || ""), keep: String(item.forge_keep || ""), drop: String(item.forge_drop || "") };
+      if (item.type === "image") {
+        const role = mode === "REF2VA" && IMAGE_ROLES.includes(item.forge_role) ? item.forge_role : mode === "REF2VA" ? "subject" : "keyframe";
+        const boxes = peopleBoxes(item);
+        return { ...common, kind: "image", path: typeof item.value === "string" ? item.value : undefined, role, subject_group: role === "subject" ? String(item.forge_subject_group ?? legacyGroups[item.id] ?? "") : "", ...(labels[item.id] ? { easy_role: labels[item.id], ...pictureButtons(item) } : mode !== "REF2VA" ? frameWho(item) : {}), ...(boxes.length ? { boxes } : {}) };
+      }
+      if (item.type === "audio") return { ...common, kind: "audio", duration_seconds: item.duration };
+      return { ...common, kind: "video", role: "motion", stream: item.media_mode === "audio" ? "audio" : item.media_mode === "video_audio" || item.audio != null ? "both" : "video", duration_seconds: item.duration };
+    });
+}

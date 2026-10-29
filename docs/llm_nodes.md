@@ -1,10 +1,75 @@
 # DaSiWa LLM / VLM Nodes
 
-Run local Transformers, llama.cpp GGUF, or Ollama text models inside a ComfyUI workflow.
+Run local Transformers, llama.cpp GGUF, loopback Ollama, or operator-configured external LLM servers inside a ComfyUI workflow. Model execution and server transports are shared with the Director's Prompt Forge; the Director keeps its existing settings, routes, cancellation and reference workflow.
 
 ## Nodes
 
-### DaSiWa LLM Model Selector
+### LLM Prompt Writer
+
+The simple way in. Type an idea, pick what the prompt is for, get a prompt back.
+
+In both the classic renderer and Nodes 2.0, `start_with` stays compact while the larger `idea` field takes the extra height when you resize the node.
+
+- `model`: one list of everything this machine can write with:
+  - GGUF files and Hugging Face model folders in `ComfyUI/models/llm` (a `.gguf` runs through llama.cpp, a folder through Transformers);
+  - `Ollama: <name>` for every model Ollama has installed, on this computer unless Settings say otherwise;
+  - `Server: <id>` for every model on the OpenAI-compatible server (llama-swap, LM Studio, llama.cpp server), once its address is set.
+
+  Workflow server addresses automatically use the same saved DaSiWa LLM server settings as Prompt Forge on single-user installations. Environment-configured endpoints take priority.
+
+  Server discovery runs in the background; node schemas read a cached list without waiting for HTTP requests. Press R after discovery has completed to update the dropdown. First-time unreachable servers contribute no entries; a transient failure retains their last successful list. Execution still reports a stopped server clearly.
+- `write_for`: Anima, Illustrious, Krea2, Wan 2.2, LTX 2.3, YuE2 Song Style, YuE2 Lyrics or YuE2 Instrumental Style.
+- `start_with`: quality tags, LoRA trigger words or anything else that must lead the prompt. The model writes no quality tags of its own (unless the idea asks for them), so this is where they go, for example `masterpiece, best quality, score_7` on Anima. It goes at the very top exactly as typed and never passes through the model, so it cannot be misspelled or dropped. On Anima and Illustrious, a copy of one of these tags in the written part is removed.
+- `idea`: what you want, in your own words or as tags.
+- `style`: a look to carry through the prompt (Anime, Watercolor, Sketch, 90s anime, Realistic and more). Anima and Illustrious get matching tags; Krea2, Wan and LTX get a description of the look. None adds nothing.
+- `detail` (1-10, 5 standard): how much gets written. 5 lets the model's guide decide; lower is shorter, higher covers more, within that model's length.
+- `creativity` (1-10, 5 standard): how far past the idea the writer may go, from 1 (add nothing) to 10 (build well past it). Sets the temperature, 0.30 to 1.10, with 0.70 at 5.
+- `max_tokens`: the most the model may write, 2048 by default. Too low and the prompt stops mid-sentence.
+- `seed`: change it, or let it randomize, for a different take on the same idea.
+- `keep_loaded`: off frees the memory after every prompt so the image model has it; on is faster when writing several in a row.
+- `images` (optional): reference pictures for a vision model, one image or a batch, the same input as on Analyze. Up to 8 are sent; a longer batch, such as a loaded video, is sampled evenly from the first image to the last. For Wan and LTX the first image is the first frame and the rest are references. With an empty idea, the prompt is written from the pictures.
+
+The output is the positive prompt only. Everything else uses the advanced nodes' defaults. For any other setting, use the two advanced nodes below. Both run the same code.
+
+### YuE2 presets
+
+Use two Prompt Writer nodes for a sung song: **YuE2 Song Style** → YuE2's `Style`
+field and **YuE2 Lyrics** → its `Lyrics` field. Each writer still returns one STRING;
+no JSON, combined fields or segment delimiters reach the output.
+
+- **Song Style:** compact musical description: language, genre, vocal character,
+  tempo, instruments and musical characteristics. Example idea: `English, warm
+  female voice, contemporary pop, 96 BPM, piano and bass, intimate and hopeful`.
+- **Lyrics:** singable words with `[Verse]`, `[Chorus]`, `[Bridge]` and `[Outro]`
+  section tags. State the language and theme in `idea`; supplied lyrics can be
+  preserved or rewritten as requested. Musical directions stay in Style.
+- **Instrumental Style:** describes the instrumental ensemble, genre, tempo,
+  phrasing and development, including `Instrumental` and `no vocals`. Leave YuE2's
+  Lyrics empty, or use section tags only; do not generate sung lyrics for it.
+
+For YuE2, the visual `style` dropdown is ignored; put musical style in `idea`.
+Detail and creativity use musical/lyrical instructions rather than camera or
+material instructions. Leave `start_with` empty for clean field output; an explicit
+prefix remains unchanged, and Lyrics joins it with a line break rather than a comma.
+
+ABC planning is set on the YuE2 node: **Full** plans melody and chords (recommended
+for general generation), **Melody** plans melody with freer accompaniment, and
+**Off** generates directly without a symbolic plan. **Max Duration** is an upper
+limit in seconds; the song may end earlier. Neither setting is emitted as prompt text.
+
+An instrumental Style prompt alone does not implement the official instrumental
+workflow or guarantee no vocals. That workflow saves YuE2's plan, transfers Vocal
+note events to Ins and renders the revised ABC; these writer presets do not edit
+scores, transcribe audio or render music. Prompt quality and audio results still
+need testing with the selected LLM and YuE2.
+
+The same guides are available in Advanced Analyze as `promptforge_yue2_style`,
+`promptforge_yue2_lyrics` and `promptforge_yue2_instrumental`. The editable guides
+live in `data/llm_skills/yue2_*.md`. Based on the official
+[YuE2 music guide](https://github.com/multimodal-art-projection/YuE/blob/main/skills/yue2-music/SKILL.md)
+and [instrumental guide](https://github.com/multimodal-art-projection/YuE/blob/main/skills/yue2-music/instrumental/SKILL.md).
+
+### DaSiWa LLM Model Selector (Advanced)
 
 Creates a lightweight `DASIWA_LLM_CONFIG` bundle. It does not output a live model object, which helps the analyze node unload memory reliably after generation.
 
@@ -16,7 +81,7 @@ ComfyUI/models/llm/
 
 For the `transformers` backend, the folder must include `config.json`, tokenizer files, processor files for vision models, and `.safetensors` weights. A single `.safetensors` file is not enough for LLM chat inference.
 
-For the `llama_cpp` backend, select a local `.gguf` file. This requires a CUDA-enabled `llama-cpp-python` installation in the ComfyUI Python environment; it is intentionally optional so a generic dependency install does not replace a GPU build with a CPU-only wheel. Install it with `CMAKE_ARGS="-DGGML_CUDA=on" /path/to/ComfyUI/venv/bin/pip install --force-reinstall --no-cache-dir llama-cpp-python`. The `ollama` backend sends requests only to the local Ollama API at `http://127.0.0.1:11434/api/chat` and uses `ollama_model` as its model name.
+For the `llama_cpp` backend, select a local `.gguf` file. `llama-cpp-python>=0.3.26` is declared as a dependency, but a generic package install does not guarantee a CUDA-enabled build. On a ComfyUI environment using CUDA 13.0, install its prebuilt GPU wheel explicitly with `/path/to/ComfyUI/venv/bin/python -m pip install --only-binary llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 'llama-cpp-python>=0.3.26'`. On other CUDA versions, use a matching GPU wheel index or build it with `CMAKE_ARGS="-DGGML_CUDA=on" /path/to/ComfyUI/venv/bin/python -m pip install --force-reinstall --no-cache-dir llama-cpp-python`. The `ollama` backend sends requests only to the local Ollama API at `http://127.0.0.1:11434/api/chat` and uses `ollama_model` as its model name.
 
 Models must already be present on disk before the node runs. Download Hugging Face models with the official tooling, review their provenance, and place the complete folder in `ComfyUI/models/llm`, or set `custom_path` to an existing local folder. Runtime downloads, Hugging Face token reads, and custom remote model code are deliberately unsupported: values supplied through ComfyUI's `/prompt` API must never choose code for the server to download or execute.
 
@@ -32,7 +97,7 @@ Important controls:
 - `llama_n_ctx`, `llama_n_gpu_layers`, `llama_n_threads`, and `llama_chat_format`: llama.cpp GGUF controls. `-1` GPU layers requests full offload; `0` uses CPU only.
 - `ollama_model` and `ollama_timeout`: local Ollama API controls. The endpoint is fixed to loopback.
 
-### DaSiWa LLM Analyze
+### DaSiWa LLM Analyze (Advanced)
 
 Runs the selected model and returns:
 
@@ -75,10 +140,74 @@ Video/image-sequence handling:
 - `use_kv_cache` is a per-generation toggle for Transformers. Turning it off may reduce peak memory for some models, but generation is slower. The implementation and quantization strategy belong to Model Selector because they are backend configuration.
 - `memory_cleanup` uses the same full cleanup path before and/or after the node: DaSiWa model cache, ComfyUI managed models, Python garbage, and the device allocator are cleared. This intentionally makes later image/video models reload rather than retain VRAM/RAM.
 
+## Prompt Writer over HTTP
+
+`POST /dasiwa/llm/write` writes one prompt without a graph, for apps such as DEAS. The body names `model` as listed by `POST /dasiwa/h3/forge/models` (`local:`, `ollama:` or `openai:` plus the name), `write_for` (a Prompt Writer target such as `Anima`), `idea`, optional `detail` and `creativity` (1–10), up to 8 `images` named as LoadImage names them (input-folder path, or `name [output]`; a model that cannot see writes from the idea alone and returns `saw_images: 0`), optional `start_with`, and the Forge's `settings`. It returns `{"prompt", "model", "saw_images"}`. It refuses while a workflow runs, like the Forge, and frees ComfyUI's models first when the LLM runs on this machine.
+
+## External LLM servers
+
+The quickest way: pick an `Ollama: <name>` or `Server: <id>` entry from Model Selector's `model` list, which lists every model on the configured servers after the local ones (press R after adding one). That entry sets the backend itself; the `backend` widget is ignored for it.
+
+Or, as before, choose `openai` or `ollama_server` in Model Selector and enter the server's model ID in `server_model`. Local `model`/`custom_path` are not used for these modes. The original `ollama` mode remains fixed to loopback and uses `ollama_model`.
+
+Set server addresses under **Settings > DaSiWa > LLM servers**, just as for Prompt Forge. Prompt Writer and Advanced Selector use these saved settings automatically; no launcher variable is needed. Local models in `ComfyUI/models/llm` remain available in the same dropdown. Selecting a server model does not silently fall back to a local model if the server fails.
+
+Workflow endpoints are never supplied by graph inputs. To override the saved addresses, or for multi-user installations, set them in the environment used to start ComfyUI:
+
+```fish
+set -gx DASIWA_LLM_OPENAI_URL http://127.0.0.1:8041/v1
+set -gx DASIWA_LLM_OLLAMA_URL http://127.0.0.1:11434
+```
+
+`DASIWA_LLM_OPENAI_API_KEY` supplies authentication for the environment-configured OpenAI endpoint. Never put keys in workflow JSON. OpenAI-compatible addresses may include `/v1`; the transport adds it when absent. With no Ollama address, the loopback default is used.
+
+Single-user workflow nodes read the saved settings from `user/default/comfy.settings.json` automatically. `DASIWA_LLM_ALLOW_SETTINGS` is no longer required. These settings are writable by ComfyUI clients; only expose a single-user installation to trusted clients. Under `--multi-user`, workflow nodes do not read another user's default settings; use global environment configuration there.
+
+An environment OpenAI URL uses only the environment API key. A Settings URL uses only the Settings API key. Keys never cross configuration sources, including when an environment URL overrides a Settings URL. The Director Forge continues to use its explicitly supplied dialog settings and never inherits workflow environment credentials.
+
+Discovery is shared by the Prompt Writer and Advanced Selector and runs off-thread. Opening the Forge model list refreshes the workflow discovery cache too; press R afterwards to reload the dropdowns. Background discovery also retries periodically when schemas are requested. Changing an endpoint or key isolates its model list from the previous configuration.
+
+For these server modes, `max_new_tokens`, temperature, top-p, seed and `ollama_timeout` are passed to the shared transport. `llama_n_ctx` also supplies Ollama's context size. Transformers dtype, quantization, KV-cache controls and `max_input_tokens` are local controls; they do not configure remote servers. OpenAI-compatible APIs have no standard repetition-penalty equivalent; a nondefault requested penalty is reported as unsupported rather than mapped to presence penalty.
+
+Cached Ollama-server calls use a five-minute keep-alive; unload-after-run requests zero keep-alive. OpenAI-compatible unload is best-effort using the server's per-model unload endpoint, and `info` reports whether it succeeded. It cannot unload a server that offers no unload API. Remote default unload does not clear ComfyUI's local model cache; explicitly selecting `memory_cleanup` still clears local memory as before.
+
+## PromptForge presets
+
+These new choices request model-specific output and return only the generated prompt, without segment delimiters or explanation panels:
+
+| Preset | Output dialect |
+|---|---|
+| `promptforge_h3` | H3 description, soundscape and music fields |
+| `promptforge_wan22` | Wan 2.2 subject → motion → camera → scene prose |
+| `promptforge_ltx` | LTX enhanced paragraph |
+| `promptforge_krea2` | Krea2 continuous prose, no negative prompt or weight syntax |
+| `promptforge_anima` | Anima positive prompt |
+| `promptforge_illustrious` | Illustrious positive prompt |
+
+The legacy Wan/LTX and caption preset IDs and instructions are unchanged. `custom` still uses the system widget; selecting a preset does not append custom instructions. Use the ordinary multiline `prompt` field for the idea, or convert that widget to an input to connect a STRING node. Optional `text_input` is still appended after it, separated by a blank line. Leave either text source empty if only the other should contribute.
+
+For H3, choose `h3_mode` and `h3_duration`. T2VA requires no sampled pictures, I2VA/L2VA one, and FL2VA two in endpoint order. Set `max_frames` accordingly. These are reference endpoints, not arbitrary video analysis frames; do not infer output aspect ratio from them. REF2VA, labelled casts and continuation drafting remain in the Director. The existing 256-token output default is preserved for older workflows; select a larger budget such as 3500 for a full H3 result and sufficient context for its long system instructions.
+
+The Wan, LTX, Krea2, Anima and Illustrious presets are short prompting guides in `data/llm_skills/`, one markdown file per model. Each one says what the job is, how that model's prompts are written, and gives one worked example. The frontmatter names the output segment and, for the tag models, `tag_style: space`, which respells any `best_quality` the model writes out of habit as `best quality` (score tags such as `score_7` and emoticons such as `o_o` keep their underscores). Edit a guide to change how that model is written for; no code change is needed. They are written for small local models, so they stay short and avoid example phrasing a small model would copy.
+
+Tag-model responses escape literal disambiguation parentheses while preserving numeric weights, including `(rain:-0.5)` and `(mist:.5)`. The user-owned `start_with` prefix retains its original whitespace, punctuation and line breaks.
+
+H3 uses the existing `data/h3_forge.json`, shared with the Director. PromptForge is not needed at runtime, and none of these presets use tools such as tag search.
+
+### Optional labelled Forge vision
+
+For new REF2VA drafts containing only labelled pictures, **Let the model see the pictures** is off by default. Enabling it sends the pictures in label order and uses a vision-specific prompt contract. The writer describes visible characters, places, rendering styles, endpoint frames and poses; those descriptions join retention or pose definitions without adding another executable output field. Missing requested descriptions produce an incomplete-visual-retention warning. A non-vision model falls back to the original blind contract.
+
+Mixed image/audio/video or unlabelled references use the normal reference path, which automatically sends available pictures to capable models; they do not show a misleading opt-out checkbox. Changing the vision option invalidates the current preview. Older saved drafts without that option remain blind.
+
 ## Notes
 
-Text-only LLMs can analyze text and prompts. Image or video-frame analysis currently requires a vision-language model with a compatible `AutoProcessor`, such as Qwen-VL/LLaVA-style Transformers model folders. The initial llama.cpp and Ollama backends are text-only.
+Text-only LLMs can analyze text and prompts. Images require an appropriate vision-language model: a compatible Transformers processor, a GGUF with its matching mmproj projector, or a vision-capable external server. GGUF Analyze discovers a matching `mmproj*.gguf` beside the model using the same pairing logic as Director; ambiguous or missing projectors fail with a clear error. GGUF vision requires llama-cpp-python 0.3.26 or newer with MTMD support. The legacy loopback `ollama` mode remains text-only.
 
 Image compression is intentionally not exposed as a memory option. Lossless compression can preserve file quality, but after the VLM processor decodes the image it does not reduce vision token count or runtime VRAM. Use `max_frames` and `resize_max_px` for image/video memory control.
 
 GGUF loading is provided through llama.cpp, not through ComfyUI diffusion checkpoint loaders. ComfyUI's native `MODEL` / `CLIP` / `VAE` objects represent diffusion models and cannot be used as LLM/VLM Transformers objects.
+
+## Development tests
+
+With `pytest` installed in the ComfyUI interpreter, run `/path/to/ComfyUI/venv/bin/python tools/run_llm_tests.py --comfyui-root /path/to/ComfyUI` from this pack. The runner binds the pack's historical `nodes.*` test imports without colliding with Core's `nodes.py`; it does not change production imports. It runs the LLM and Forge-vision Python tests by default and accepts explicit pytest paths/options. Frontend behavior tests run with `node --test tests/test_h3_forge_vision_frontend.cjs`.

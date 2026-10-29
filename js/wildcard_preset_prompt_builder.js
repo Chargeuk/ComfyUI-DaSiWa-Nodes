@@ -94,6 +94,7 @@ function injectStyles() {
     style.id = "dasiwa-wildcard-builder-style";
     style.textContent = `
 .dasiwa-wildcard-builder { box-sizing:border-box; display:flex; flex-direction:column; gap:7px; width:100%; min-width:0; height:100%; overflow:hidden; color:var(--input-text,#ddd); font:12px sans-serif; }
+.lg-node .dasiwa-wildcard-builder { height:${PICKER_HEIGHT}px; max-height:${PICKER_HEIGHT}px; flex:0 0 ${PICKER_HEIGHT}px; }
 .dasiwa-wildcard-controls { flex:none; min-width:0; }
 .dasiwa-wildcard-selections { flex:1 1 auto; min-height:0; overflow:auto; padding-right:3px; }
 .dasiwa-wildcard-preview-segment { flex:0 1 150px; min-height:72px; overflow:auto; padding-right:3px; }
@@ -210,6 +211,15 @@ app.registerExtension({
             const expanded = new Set();
             const container = document.createElement("div");
             container.className = "dasiwa-wildcard-builder";
+            container.tabIndex = 0;
+            container.dataset.captureWheel = "true";
+            container.addEventListener("pointerdown", event => {
+                // ComfyUI captures wheel events in focused widgets before DOM
+                // listeners run. Keep native input/button focus intact.
+                if (!event.target.closest("input, button, select, textarea, a")) {
+                    container.focus({ preventScroll: true });
+                }
+            });
             container.textContent = "Loading wildcard library…";
             this.addDOMWidget("wildcard_subjects", "custom", container, {
                 serialize: false,
@@ -421,6 +431,14 @@ app.registerExtension({
                 this.setDirtyCanvas?.(true, true);
             };
 
+            // Installation can precede restoration of saved widget values.
+            // Reload without syncing: the serialized widget remains canonical.
+            this.dasiwaWildcardReloadState = () => {
+                for (const key of Object.keys(state)) delete state[key];
+                Object.assign(state, parseState(stateWidget?.value || this.properties?.wildcard_selection_state));
+                render();
+            };
+
             for (const name of ["style", "seed", "token_budget"]) {
                 const control = widget(this, name);
                 if (!control) continue;
@@ -456,6 +474,14 @@ app.registerExtension({
             return result;
         };
 
+        // LiteGraph restores widgets_values before invoking onConfigure().
+        const originalOnConfigure = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function () {
+            const result = originalOnConfigure?.apply(this, arguments);
+            this.dasiwaWildcardReloadState?.();
+            return result;
+        };
+
         return undefined;
     },
 
@@ -466,6 +492,7 @@ app.registerExtension({
         // will run after this extension has registered. Rebuild the transient,
         // non-serialized DOM widget in that lifecycle path as well.
         installWildcardPicker?.call(node);
+        node.dasiwaWildcardReloadState?.();
     },
 
     afterConfigureGraph() {
@@ -473,7 +500,9 @@ app.registerExtension({
         // widget layer has mounted. Revisit every restored instance after graph
         // configuration so the picker is always registered with that layer.
         for (const node of app.graph?._nodes || []) {
-            if (isWildcardNode(node)) installWildcardPicker?.call(node);
+            if (!isWildcardNode(node)) continue;
+            installWildcardPicker?.call(node);
+            node.dasiwaWildcardReloadState?.();
         }
     },
 });

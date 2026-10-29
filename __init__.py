@@ -1,25 +1,39 @@
 if __package__:
+    from server import PromptServer
     from .nodes.nodes_scaling import DaSiWa_ResolutionScaleCalculator, DaSiWa_TorchResize
     from .nodes.nodes_status_switch import DaSiWa_NodeStatusSwitch
     from .nodes.nodes_rtx_upscaler_refiner import DaSiWa_RTX_UpscalerRefiner
+    from .nodes.nodes_rtx_frame_generation import DaSiWa_RTX_FrameGeneration
     from .nodes.nodes_metadata import DaSiWa_MetadataImageSaver, DaSiWa_MetadataImageSaverFull, DaSiWa_MetadataConfig, DaSiWa_CreateExtraMetadata
     from .nodes.nodes_advanced_lora_loader import DaSiWa_AdvancedLoRALoader
-    from .nodes.nodes_comfy_kitchen_attention import PathchComfyKitchenAttentionDaSiWa
     from .nodes.nodes_watermark import DaSiWa_Watermark
     from .nodes.nodes_random_string_picker import DaSiWa_RandomStringPicker
     from .nodes.nodes_seed_control import DaSiWa_SeedControl
     from .nodes.nodes_wildcard_preset_prompt_builder import DaSiWa_WildcardPresetPromptBuilder
     from .nodes.nodes_llm import DaSiWa_LLMModelSelector, DaSiWa_LLMAnalyze
+    from .nodes.nodes_llm_simple import DaSiWa_LLMPromptWriter
     from .nodes.nodes_inpaint import DaSiWa_InpaintCropPrep, DaSiWa_InpaintComposite
     from .nodes.nodes_enhanced_video_combine import DaSiWa_EnhancedVideoCombine
+    from .nodes.nodes_seamless_loop import DaSiWa_SeamlessLoop
     from .nodes.nodes_minimax_h3_director import MiniMaxH3Director
     from .nodes.nodes_minimax_h3_director_guide import MiniMaxH3DirectorGuide
+    from .nodes.refmod_export import DaSiWaH3RefModExport
+    from .nodes.h3_continuity.nodes import DaSiWaH3ContinuityAppend, DaSiWaH3ContinuityPublish
+    from .nodes.h3_continuity.segment_nodes import DaSiWaH3ContinuitySegmentPrepare, DaSiWaH3ContinuitySegmentDecode
+    from .nodes.h3_continuity.assembly_node import DaSiWaH3ClipAssemble
+    from .nodes.h3_continuity.transition import DaSiWaH3TransitionGuide, DaSiWaH3TransitionRender
+    from .nodes.h3_continuity import routes as continuity_routes
+    continuity_routes.register_routes(PromptServer.instance)
     from .nodes.nodes_minimax_h3_cache import MiniMaxH3Cache
+    from .nodes.nodes_minimax_h3_tiled_upscale import DaSiWaH3TiledUpscale
+    from .nodes.nodes_tiled_diffusion import DaSiWaTiledDiffusion
 
     from .nodes import nodes_system_monitor
+    from .nodes import about  # registers /dasiwa/version route
     from .nodes import input_images  # registers /dasiwa/input-images route
+    from .nodes import h3_forge  # registers /dasiwa/h3/forge routes
     from .nodes import refmod_library
-    refmod_library.register_routes(__import__("server").PromptServer.instance)
+    refmod_library.register_routes(PromptServer.instance)
     from .nodes import lora_info  # registers /dasiwa/ltx2/lorainfo + /dasiwa/ltx2/loraimg
     from .nodes.helper_logging import log_startup_summary
 
@@ -28,24 +42,36 @@ if __package__:
         "DaSiWa_TorchResize": DaSiWa_TorchResize,
         "DaSiWa_NodeStatusSwitch": DaSiWa_NodeStatusSwitch,
         "DaSiWa_RTX_UpscalerRefiner": DaSiWa_RTX_UpscalerRefiner,
+        "DaSiWa_RTX_FrameGeneration": DaSiWa_RTX_FrameGeneration,
         "DaSiWa_MetadataImageSaver": DaSiWa_MetadataImageSaver,
         "DaSiWa_MetadataImageSaverFull": DaSiWa_MetadataImageSaverFull,
         "DaSiWa_MetadataConfig": DaSiWa_MetadataConfig,
         "DaSiWa_CreateExtraMetadata": DaSiWa_CreateExtraMetadata,
         "DaSiWa_LTX2LoraLoader": DaSiWa_AdvancedLoRALoader,
-        "PathchComfyKitchenAttentionDaSiWa": PathchComfyKitchenAttentionDaSiWa,
         "DaSiWa_Watermark": DaSiWa_Watermark,
         "DaSiWa_RandomStringPicker": DaSiWa_RandomStringPicker,
         "DaSiWa_SeedControl": DaSiWa_SeedControl,
         "DaSiWa_WildcardPresetPromptBuilder": DaSiWa_WildcardPresetPromptBuilder,
         "DaSiWa_LLMModelSelector": DaSiWa_LLMModelSelector,
         "DaSiWa_LLMAnalyze": DaSiWa_LLMAnalyze,
+        "DaSiWa_LLMPromptWriter": DaSiWa_LLMPromptWriter,
         "DaSiWa_EnhancedVideoCombine": DaSiWa_EnhancedVideoCombine,
+        "DaSiWa_SeamlessLoop": DaSiWa_SeamlessLoop,
         "DaSiWa_InpaintCropPrep": DaSiWa_InpaintCropPrep,
         "DaSiWa_InpaintComposite": DaSiWa_InpaintComposite,
         "MiniMaxH3Director": MiniMaxH3Director,
         "MiniMaxH3DirectorGuide": MiniMaxH3DirectorGuide,
+        "DaSiWaH3RefModExport": DaSiWaH3RefModExport,
+        "DaSiWaH3ContinuityAppend": DaSiWaH3ContinuityAppend,
+        "DaSiWaH3ContinuityPublish": DaSiWaH3ContinuityPublish,
+        "DaSiWaH3ContinuitySegmentPrepare": DaSiWaH3ContinuitySegmentPrepare,
+        "DaSiWaH3ContinuitySegmentDecode": DaSiWaH3ContinuitySegmentDecode,
+        "DaSiWaH3ClipAssemble": DaSiWaH3ClipAssemble,
+        "DaSiWaH3TransitionGuide": DaSiWaH3TransitionGuide,
+        "DaSiWaH3TransitionRender": DaSiWaH3TransitionRender,
         "MiniMaxH3Cache": MiniMaxH3Cache,
+        "DaSiWaH3TiledUpscale": DaSiWaH3TiledUpscale,
+        "DaSiWaTiledDiffusion": DaSiWaTiledDiffusion,
 
     }
 
@@ -53,25 +79,37 @@ if __package__:
         "DaSiWa_ResolutionScaleCalculator": "DaSiWa Resolution Scale Calculator",
         "DaSiWa_TorchResize": "DaSiWa Torch Resize",
         "DaSiWa_NodeStatusSwitch": "DaSiWa Node Status Switch",
-        "DaSiWa_RTX_UpscalerRefiner": "DaSiWa RTX Upscaler & Refiner",
+        "DaSiWa_RTX_UpscalerRefiner": "RTX Upscaler & Refiner",
+        "DaSiWa_RTX_FrameGeneration": "RTX Frame Generation",
         "DaSiWa_MetadataImageSaver": "DaSiWa Metadata Image Saver",
         "DaSiWa_MetadataImageSaverFull": "DaSiWa Metadata Image Saver (Full)",
         "DaSiWa_MetadataConfig": "DaSiWa Metadata Config",
         "DaSiWa_CreateExtraMetadata": "DaSiWa Create Extra Metadata",
         "DaSiWa_LTX2LoraLoader": "Advanced LoRA Loader",
-        "PathchComfyKitchenAttentionDaSiWa": "Patch Comfy Kitchen Attention",
         "DaSiWa_Watermark": "DaSiWa Watermark Overlay",
         "DaSiWa_RandomStringPicker": "DaSiWa Random String Picker",
         "DaSiWa_SeedControl": "Seed Control",
         "DaSiWa_WildcardPresetPromptBuilder": "DaSiWa Wildcard & Preset Prompt Builder",
-        "DaSiWa_LLMModelSelector": "DaSiWa LLM Model Selector",
-        "DaSiWa_LLMAnalyze": "DaSiWa LLM Analyze",
+        "DaSiWa_LLMModelSelector": "DaSiWa LLM Model Selector (Advanced)",
+        "DaSiWa_LLMAnalyze": "DaSiWa LLM Analyze (Advanced)",
+        "DaSiWa_LLMPromptWriter": "LLM Prompt Writer",
         "DaSiWa_EnhancedVideoCombine": "DaSiWa Enhanced Video Combine",
+        "DaSiWa_SeamlessLoop": "Seamless Loop",
         "DaSiWa_InpaintCropPrep": "DaSiWa Inpaint Crop Prep",
         "DaSiWa_InpaintComposite": "DaSiWa Inpaint Composite",
-        "MiniMaxH3Director": "MiniMax H3 Director",
-        "MiniMaxH3DirectorGuide": "MiniMax H3 Director Guide",
-        "MiniMaxH3Cache": "MiniMax H3 Cache",
+        "MiniMaxH3Director": "MiniMaxH3 Director",
+        "MiniMaxH3DirectorGuide": "MiniMaxH3 Director Guide",
+        "DaSiWaH3RefModExport": "MiniMaxH3 Create RefMod",
+        "DaSiWaH3ContinuityAppend": "MiniMaxH3 Continuity • Append & Stage",
+        "DaSiWaH3ContinuityPublish": "MiniMaxH3 Continuity • Publish Export",
+        "DaSiWaH3ContinuitySegmentPrepare": "MiniMaxH3 Continuity • Segment Prepare",
+        "DaSiWaH3ContinuitySegmentDecode": "MiniMaxH3 Continuity • Segment Decode",
+        "DaSiWaH3ClipAssemble": "MiniMaxH3 • Join Clips",
+        "DaSiWaH3TransitionGuide": "MiniMaxH3 • Transition Guide",
+        "DaSiWaH3TransitionRender": "MiniMaxH3 • Transition Render",
+        "MiniMaxH3Cache": "MiniMaxH3 Cache",
+        "DaSiWaH3TiledUpscale": "MiniMaxH3 Enhanced Upscale",
+        "DaSiWaTiledDiffusion": "Tiled Diffusion (Image)",
 
     }
     log_startup_summary(len(NODE_CLASS_MAPPINGS))

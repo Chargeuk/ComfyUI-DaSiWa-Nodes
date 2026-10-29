@@ -1,452 +1,169 @@
-# MiniMax H3 Director
+# MiniMaxH3 Director
 
-A timeline-based authoring node for ComfyUI's native MiniMax H3 models. It centralizes media management, ordering, trimming, per-reference prompts, and the global prompt into one workflow node, validates H3 constraints before execution, and routes everything to the installed native MiniMax H3 implementation — no duplicate backend logic.
+Build an H3 video in one place: arrange references on a timeline, trim them, write a prompt, and choose a canvas. **Director** prepares the inputs; **Director Guide** checks them and calls ComfyUI's native H3 nodes. You do not wire the native image-to-video or reference-to-video nodes separately.
 
-[News & Changelog — collection-wide news and change history →](news_and_changelog.md)
+[Collection changelog](news_and_changelog.md#minimax-h3-director-v1) · [Continuity guide](h3_continuity.md)
 
-## Changelog
+## Start here
 
-The Director's full change history now lives in the collection-wide [News & Changelog](news_and_changelog.md#minimax-h3-director-v1).
+1. Install the pack's dependencies (`pip install -r requirements.txt` in ComfyUI's Python environment), restart ComfyUI, and use a ComfyUI build with native MiniMax H3 support.
+2. Add **MiniMaxH3 Director** and **MiniMaxH3 Director Guide** from `DaSiWa/MiniMax H3`.
+3. Pick a mode, add media to the appropriate lane, set Duration and canvas, and write a prompt. Connect the matching model to Director, and CLIP and visual VAE to Guide. REF2VA also needs an audio VAE.
+4. Connect Guide's conditioning and latent to your normal sampler/decode/export path. The Director forwards the selected model to that sampler path.
 
-## Quick overview
-
-- One node holds all your references, trims, ordering, endpoint frames, and prompts.
-- Five endpoint modes — T2VA, I2VA, L2VA, FL2VA (text/image endpoints, up to 2 frame slots) and REF2VA (multi-image/video/audio references) — plus **Image Inpaint** (exactly one image, single-frame output).
-- Separate Image, Video, and Audio lanes. Click a lane to select it; paste / drop compatible media there.
-- Per-video stream switch: choose Video only, Audio only, or Video+embedded-audio with identical trim ranges.
-- Standalone audio clips can be trimmed with left/right handles just like video.
-- REF2VA shows a **REFMOD** button directly after **INPUT SCALING**. It opens a separate overlay without changing the Director node's size. The overlay loads saved standalone and v5 bundle references only when opened and explains every setting.
-
-## RefMods in REF2VA
-
-Place `.safetensors` RefMod files in `ComfyUI/models/refmods/` or any subfolder, for example `models/refmods/people/alice.safetensors`. The Director reads standalone image, video, and audio files plus upstream v5 bundle files directly, with no runtime dependency on another custom-node pack. You may optionally install [ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod) to create RefMod files.
-
-**Credit:** The saved person RefMod concept, `.safetensors` latent file format, and strength scaling design are based on the upstream work in [Luisacaotica/ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod). This standalone DaSiWa implementation reads and writes the same file format, so RefMods created with either pack are interchangeable. Both packs can be installed side-by-side without conflict — they register different node names and categories, and both use ComfyUI's shared `models/refmods/` folder type via `folder_paths`.
-
-Each selected row stores its editable description in the workflow. That workflow description takes precedence over the description embedded in the file. The overlay and prompt-builder **Insert RefMod #** buttons write the full expanded native text at the cursor, such as `<Video 1>: digital animation, slime girl`; `<RefMod N>` aliases remain supported in saved workflows and are translated when queued.
-
-Upstream v5 bundles are expanded into their image, video, and audio members. A single `<RefMod N>` tag resolves to every native reference label contained by that bundle, in member order. Strength uses direct latent scaling (`latent * strength`), not the upstream pack's blur-mix behavior; use full strength if low-strength scaling does not suit a particular file.
-- Video thumbnails: each uploaded video shows its first frame as a background preview behind the clip tile.
-- Simple / Structured prompt mode: toggle how builder fields assemble into the final prompt (persisted per workflow).
-- Frame rate: `frame_rate` input (0.1–240, default 24) sets the output FPS and is re-emitted as an output.
-- Crop preview: ▶ Play crop plays only the current crop range; the preview range is draggable.
-- Paste-replace: pasting over a selected tile replaces it in place, keeping its slot.
-- Mode-specific prompt builders:
-  - FL2VA/I2VA/L2VA/T2VA: guided fields for description and audio sections with automatic alignment headers.
-  - REF2VA: six free-text sections (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music) with helper buttons — Insert Shot, Prefill Labels & Summary, and Preview Prompt.
-- Only the selected model is loaded: `ref2va_model` for REF2VA, `fl2va_model` for all image-to-video modes (FL2VA family + Image Inpaint); the Guide node calls ComfyUI's built-in H3 nodes. REF2VA passes native inputs by name, preserving compatibility if Core reorders them (v0.4.36).
-
-## Installation and graph setup
-
-Install dependencies and restart ComfyUI:
-
-```bash
-pip install -r requirements.txt
+```mermaid
+flowchart LR
+    M["H3 model loader<br>optional LoRA or model patchers"] -->|MODEL| D["Director<br>timeline + prompt"]
+    D -->|guide| G["Director Guide<br>native H3 routing"]
+    C["H3 CLIP loader"] -->|clip| G
+    V["H3 visual VAE loader"] -->|vae| G
+    A["H3 audio VAE loader<br>REF2VA + video import"] -.->|audio_vae| G
+    D -->|model| S["Sampler"]
+    G -->|positive + latent| S
+    S --> X["Decode → export"]
 ```
 
-Ensure your ComfyUI version includes native MiniMax H3 support. Add these two nodes from `DaSiWa/MiniMax H3`:
+| Requirement | Where it goes | When needed |
+| --- | --- | --- |
+| H3 diffusion `MODEL` | Director `fl2va_model` | T2VA, I2VA, L2VA, FL2VA, Image Inpaint |
+| H3 diffusion `MODEL` | Director `ref2va_model` | REF2VA |
+| H3 text encoder / `CLIP` | Guide `clip` | Every mode |
+| H3 visual `VAE` | Guide `vae` | Every mode |
+| H3 audio `VAE` | Guide `audio_vae` | REF2VA; also importing an ordinary video for continuity, even if silent |
+| Optional RefMod files | `ComfyUI/models/refmods/` | REF2VA saved references; no other node pack required to read them |
+| Optional Prompt Forge model | `ComfyUI/models/llm/`, Ollama, or OpenAI-compatible server | Only for AI-assisted prompt drafts |
+| Optional continuity nodes | After sampling and after export | Only to save checkpoints or extend a source; see [wiring](h3_continuity.md#wiring) |
 
-1. **MiniMax H3 Director** — your timeline, references, and prompt editor.
-2. **MiniMax H3 Director Guide** — validation and routing to native H3 nodes.
+Only the active Director model socket is requested (lazy loading). A LoRA loader, MiniMax H3 Cache, attention patcher, or model preview override may feed that socket **before** Director. Do not loop Director's model output into its own upstream loader. External width and height overwrite sockets must both be connected; they override canvas calculations and input scaling. `external_prompt_overwrite` accepts a nonempty external prompt for ordinary generations. `frame_rate` defaults to 24, accepts 0.1–240, and is also an output; continuity uses its own native timing constraints.
 
-Wire them like this:
+## Choose a mode
 
-```text
-┌──────────────────────────────────────┐
-│ UNET Loader                          │     diffusion_models/*.safetensors
-│ CLIP Loader                          │     text_encoders/qwen3vl_32b_minimax_h3_*.safetensors
-│ VAE Loader (visual)                  │     vae/minimax_h3_video_vae_fp16.safetensors
-│ VAE Loader (audio)                   │     vae/minimax_h3_audio_vae_fp32.safetensors
-│                                      │     (only for REF2VA mode)
-└───┬────────────┬──────────┬──────────┘
-    │            │          │
-    ▼            ▼          ▼
-┌──────────────────────────────────────────────┐
-│ DaSiWa MiniMax H3 Director                   │
-│  - add/edit references                       │
-│  - set trims, ordering, prompts              │
-│  - emits structured "guide" dict             │
-└────┬─────────────────────────────────────────┘
-     │ guide
-     ▼
-┌──────────────────────────────────────────────┐
-│ DaSiwa MiniMax H3 Director Guide             │
-│  - validates director output                 │
-│  - assembles final prompt                    │
-│  - CALLS the native ComfyUI H3 nodes:        │
-│      • MiniMaxH3ImageToVideo   (FL2VA)       │
-│      • MiniMaxH3ReferenceToVideo (REF2VA)    │
-│  - you NEVER wire those native nodes yourself│
-└────┬─────────────────────────────────────────┘
-     │ positive, latent
-     ▼
-┌──────────────────────────────────────────────┐
-│ Standard ComfyUI sampling/decoding chain     │
-│  - KSampler                                  │
-│  - VAE Decode                                │
-│  - Enhanced Video Combine / Image Save etc.  │
-└──────────────────────────────────────────────┘
+| Mode | Use it for | References |
+| --- | --- | --- |
+| T2VA | Text to video | None |
+| I2VA | Start from an image | First-frame image |
+| L2VA | Finish at an image | Last-frame image |
+| FL2VA | Start and/or finish at an image | Up to two endpoint images; zero works as text-only |
+| REF2VA | Borrow identity, style, motion, composition or sound | Up to 9 images, 3 videos, 3 audio clips; 12 files total |
+| Image Inpaint | Edit/refine a still | Exactly one image, no video/audio references; native five-frame pass yields one output frame (use Get Image from Batch). Optional Enhanced Upscale goes before decode/extraction. |
+
+Endpoint modes accept images only. Switching modes hides incompatible timeline items rather than deleting them; switching back restores them. T2VA does not use those hidden references. REF2VA audio needs at least one visual reference. Each reference video/audio crop must be 2–15 seconds; combined visual video length and combined audio length must each stay within 15 seconds. The Director reports violations in its node status before native execution.
+
+## Work in the timeline
+
+Choose the Image, Video or Audio lane, then use **+**, drag/drop or paste (Ctrl+V). Media is saved under ComfyUI's `input/` folder. Click a tile to edit its description, trim or remove it; drag to reorder. Pasting onto a selected tile replaces it without moving its slot. Video tiles show a first-frame thumbnail, and audio tiles show a waveform. Video and audio crops have draggable endpoints and a crop-play preview.
+
+Audio and video previews show a source-time crop track, live playback line and white draggable cursor grip. Audio also shows the full-file amplitude waveform, with the selected crop highlighted and the rest dimmed. Drag either endpoint to resize the crop, or drag inside it to move the whole selection. A live playhead and source-time readout follow both **Play crop** and the native media player. Drag the white grip at the top of the playhead to choose a playback position without changing the crop; the native player’s Play button starts there. Arrow keys move the focused grip by 1 second, Shift+Arrow by 0.1 seconds. Scrubbing leaves crop-only playback and returns to the full-file player. **Play crop** always starts at the crop start and stops at its end, waiting for media readiness and the seek to complete. Audio/video sources that refuse HTTP seeking use a temporary local Blob instead; this needs the compressed file in browser memory until the preview closes. Closing the preview stops playback. Existing timeline waveform data is reused; otherwise the browser decodes the file once for that preview, retaining only compact amplitude peaks afterward. Long files need additional temporary browser memory. If waveform decoding fails, audio playback and crop controls remain available.
+
+For a REF2VA video tile, choose **V** (frames), **A** (embedded sound), or **V+A** (both). An attached soundtrack shares its video's trim. Audio gets its own `<Audio N>` label; image, video and audio labels are numbered within their type in timeline order. Use those labels consistently in your prompt.
+
+**Load / Save** handles reference files, prompts, or both as a pack, with append/overwrite choices. Loading checks mode limits and missing files first. **Clear** removes the timeline, prompt and Forge draft history. The toolbar **Remove** acts on the selected tile.
+
+### Canvas and input scaling
+
+The Resolution panel offers Auto or custom aspect ratio and resolution. Auto aspect follows the first image/video; Auto resolution uses a 768-pixel short side. Presets snap to H3's 16-pixel grid. Input scaling affects visual references, not audio:
+
+| Setting | Effect |
+| --- | --- |
+| Off | Keep the input tensor as-is |
+| Auto | Downscale only if needed to a 2048-pixel short side; never enlarge smaller inputs |
+| Target - Selected Aspect & Resolution | Stretch to the selected canvas |
+| Fit | Preserve source aspect inside the canvas box, with dimensions divisible by 16; output may be smaller than the canvas, without padding or cropping |
+| Fill and crop | Preserve source aspect, scale to cover the canvas and center-crop excess edges; output fills the canvas |
+| Fit and pad | Preserve source aspect, fit inside the canvas and center with black padding; output fills the canvas without removing source edges |
+| Long side with divisible crop | Match the source long side to the corresponding canvas dimension, then center-crop the other side to fit the box and the 16-pixel grid; output may be smaller than the canvas |
+
+## Write a prompt
+
+There is one editable prompt field. Write freely, or click **Insert Prompt Structure** for mode-appropriate H3 headings. **Simple / Structured** controls how older builder content is assembled and is saved with the workflow. **Insert [Shot N]** adds a shot marker. In REF2VA, **Prefill Labels & Summary** fills reference labels and descriptions without inventing visual/audio details; check its proposed roles and finish the actual action yourself.
+
+```mermaid
+flowchart LR
+    R["Timeline references<br>labels + descriptions"] --> P["Your prompt<br>or inserted structure"]
+    F["Prompt Forge<br>optional draft"] -->|"Apply to node only"| P
+    P --> G["Guide → native H3 conditioning"]
 ```
 
-Connections detail:
+Use `[Shot 1]` for the start and `[Shot 2] At 00:04.500` for a later cut (target-video time, not source time). For endpoint images, state how `<Picture 1>` at 0 seconds and, if present, `<Picture 2>` at the end align with the target video. The base structure uses `integrated_multimodal_description`, `overall_soundscape`, and `non_diegetic_music`.
 
-- Director `guide` → Guide `guide`
-- Selected MiniMax H3 model → Guide `model`
-- `CLIP` → Guide `clip`
-- Visual `VAE` → Guide `vae`
-- In REF2VA: audio VAE → Guide `audio_vae`
-- Guide outputs `positive` and `latent` → standard MiniMax H3 sampler/decoder chain
+REF2VA's optional structure has six headings: `subject_definitions`, `summary`, `retention_analysis`, `detailed_description`, `overall_soundscape`, `non_diegetic_music`. Use `<Subject N>` for who/what appears, `<Picture N>` for concrete frame anchors, `<Video N>` for structural pacing/editing, and `<Audio N>` for sound references. Describe transferred appearances or motion under Subjects. Retention terms include `fully_preserved`, `partially_preserved`, `attribute_transfer`, `weak_reference` (visual) and `fully_copy`, `partially_copy`, `reference`, `weak_reference` (audio). For example, distinguish “At 00:05.000 in the target video” from “near 00:02.400 in `<Video 1>`.”
 
-Important: the Guide node replaces and wraps ComfyUI's native `MiniMaxH3ImageToVideo` and `MiniMaxH3ReferenceToVideo` nodes. You do not add or wire those native nodes yourself — the Guide calls them internally based on the chosen mode.
+For more prompt syntax, see MiniMax's [base prompt guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md) and [full-reference guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md).
 
-The Director has optional model sockets (`fl2va_model`, `ref2va_model`) for lazy loading: connect whichever model matches your active mode. The Guide refuses REF2VA without an audio VAE and detects a swapped MiniMax H3 video/audio VAE before native execution (v0.4.37).
+### Prompt Forge (optional)
 
-## Modes at a glance
+Click **Prompt Forge**, enter an **Idea** (or **Next action** during continuity), choose a model, **Creativity** and **Detail** (1–10), then **Generate**. Review the draft and explicitly click **Apply to node**; generating alone does not change your prompt or queue a video. **Regenerate** makes another draft; Cancel/close stops an active request. The last three successful drafts are saved in this node's workflow properties, not reference packs. Choose one from history to preview and explicitly reapply it, even after the node prompt has been edited or another draft applied. This replaces prompt text only; a changed source, references, mode, Duration, canvas or model connections still makes the draft incompatible. Changes after selecting it are checked again on Apply. A draft for another mode must be applied in that mode. **Clear history** leaves the applied prompt intact; Director **Clear** removes both.
 
-### FL2VA (First/Last Frame to Video)
+**Canvas:** Forge receives the Director's current output width and height and derives the exact aspect ratio from those dimensions, not from reference images. Director dimensions take priority over conflicting format requests in the Idea. When external width/height overrides are connected, their runtime values are unknown to Forge, so it is instructed to omit aspect ratio and resolution rather than guess. Canvas changes invalidate existing drafts.
 
-Use for text-only generation, single-image starting frames, or first+last frame interpolation.
+**Detail and Creativity:** Detail increases descriptive precision, not shot count or additional events. Low Creativity uses one continuous shot unless the Idea explicitly requests multiple shots. Medium Creativity permits small plausible surprises and only clearly motivated cuts; high Creativity permits unexpected events and optional creative cuts, not a cutting quota. Explicit single-shot/no-cut or multi-shot requests take priority. FL2VA still requires an explicit request for multiple shots; continuity remains uninterrupted at every Creativity level. These are model instructions, not a guarantee that every model follows them.
 
-- Zero images → pure T2VA
-- One image → first-frame conditioning (I2VA-style)
-- Two images → first and last frame interpolation (true FL2VA)
-- Up to 2 image slots; video/audio files are blocked in this mode.
-- Endpoint images require an alignment instruction line as the very first line of the global prompt.
+**Shots:** choose **Auto** or exactly **1–5** shots for a new clip. A selected count overrides shot counts in the Idea, Detail and guide examples. Each numbered shot has an optional description box; filled boxes join the Idea as `Shot N: ...`, and the boxes alone are sufficient to generate. Auto ignores these boxes; reducing the count excludes later boxes without erasing their session text. Successful drafts save their count and descriptions in history. Shots is hidden during continuity, which remains uninterrupted. A mismatched generated count produces a warning. Invalid cut timestamps at/past the clip end or before the previous cut are redistributed within the available gap; shot text is unchanged.
 
-Alignment instruction patterns:
+**Picture labels and People boxes:** REF2VA pictures can combine Character, Place, Style and frame roles; Pose and Custom remain exclusive. Character numbers identify the same person across pictures. Who buttons start at six and grow up to 32. For several people, select an optional left/right, top/bottom or front/back order, or leave the order unset. In REF2VA character pictures and endpoint-mode frames, **Find people** asks the selected vision model for boxes; **Add character** creates a manual box. Drag or resize boxes, change their numbers (an occupied number swaps), remove one or clear them all. Boxes determine identity and left-to-right placement on that picture, replacing its Who/order controls. Pose's **Who takes it** selects target characters, never the reference person's identity. FL2VA's slots remain first/last-frame anchors. Labels, notes and boxes travel with workflows and reference-file packs.
 
-For one endpoint (first frame only):
-```text
-For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
+**Cast and scene:** editable cards describe each character; labelled REF2VA also provides Place, Style and one card per Pose picture. **Read Cast automatically** is on by default, with a browser-saved opt-out. Opening Forge reads empty cards with the selected model; unedited cards refresh after relevant picture, box, note, Idea or Shot changes. **Scan people / Scan picture** explicitly rereads cards even with automatic reading off. Edited cards are preserved and marked out of date instead of overwritten. Character crops are used when boxes isolate a person; heavily overlapping boxes use the whole picture and position instead. Cards are saved in node properties, including embedded PNG workflows, not reference-file packs. Director Clear removes them.
 
-integrated_multimodal_description: ...
+**Card priority:** cards supply reference appearance. Explicit changes in Idea or Shot instructions override conflicting card traits, retaining everything else. Carded labelled REF2VA subjects use their card in definitions/retention; endpoint modes send cards alongside spatial placement. Cards do not introduce new native conditioning or replace reference pixels. Review the result before Apply; model compliance is not guaranteed.
+
+Automatic cards whose inputs changed are omitted from Generate until reread; edited cards remain available. Pending reads cannot overwrite renumbered identities or newer box/role edits, and Generate waits for Find people. The reader inherits the existing adult-only prompt policy; generated or edited cards containing explicit minor/age-reducing terms are rejected with an instruction to describe an adult. Warm-model cleanup remains active when draft preparation fails and replaces old request ownership instead of accumulating backend objects.
+
+**No vision:** a known non-vision reader is refused before image loading. An OpenAI-compatible server has no standard capability endpoint, so its first image call may be the capability test. A no-vision response stops further automatic cards until another model is selected; empty cards fall back to the existing draft path. Manual cards and boxes remain usable, and Forge does not switch models automatically. Automatic Cast reading is independent of **Let the model see the pictures**, which controls only the subsequent draft's images.
+
+For new image-only labelled REF2VA drafts, the prompt model receives the cast and instructions, **not image pixels by default**. Enable **Let the model see the pictures** to also send them in label order. Vision descriptions join each subject’s retention line or the pose definition; missing descriptions produce a warning. Small models may mix up identities with pictures, so labels-only remains the default. A non-vision model falls back to labels. Toggling the choice invalidates the current draft; saved drafts retain it and older drafts remain blind. Mixed audio/video references or saved unlabelled references use the full REF2VA path, retaining their definitions and retention; vision-capable writers can then receive timeline pictures. Code writes subject definitions and retention from the labels and generated shots; the video model still consumes the references. Review identities, acting and retention before Apply. Pose transfers posture only; Custom requires instructions. Forge preserves reference appearance instead of inventing a visual medium. An English keyword heuristic warns about possibly unsolicited music but never deletes a score requested in another language or with an unlisted instrument. Repetitive output may be rejected as runaway text; the raw draft remains available for review.
+
+| Forge source | Setup | Notes |
+| --- | --- | --- |
+| Local ComfyUI model | Chat-model directory or GGUF under `models/llm/` | `local:`; GGUF needs `llama-cpp-python`. Vision GGUF also needs its matching `mmproj` in the same model folder. Bare `.safetensors` is not a chat model. |
+| Ollama | Running Ollama server with a downloaded chat/vision model | `ollama:`; defaults to `http://127.0.0.1:11434` |
+| OpenAI-compatible | Server with `/v1/models` and streaming `/v1/chat/completions` | `openai:`; configure its base URL to enable it |
+
+Set remote URLs in **ComfyUI Settings → DaSiWa → LLM servers** (Ollama address or OpenAI-compatible server address); set the OpenAI-compatible API key there if required. Reopen Forge after changing a server or local model. The Director does not download models or launch servers. In-process local models unload after every call. Cast/People reads may keep server models warm across calls, then request unload after 30 seconds idle, when Forge closes, or before the Director runs; actual unload depends on the server. Drafting still unloads after use. Forge refuses model work while a workflow is running. For GGUF installation/build alternatives, see [LLM nodes](llm_nodes.md).
+
+For local GGUF and Ollama drafts, Forge adds 1,820 context tokens per attached picture, rounding up to 256: the default 16,384 becomes 18,432 for one picture or 32,768 for nine. Continuity uses the same rule, counting both references and source-tail frames. Larger contexts need more memory. Transformers and OpenAI-compatible servers retain their own context limits. Token estimates include the requested reply budget but only warn; they are not exact tokenizer counts. A recognized backend context overflow is reported without retrying blindly, and local out-of-memory errors remain distinct.
+
+Forge uses the selected mode, Duration and reference instructions. REF2VA image labels also retain the compatible subject/style/keyframe/pose/custom role metadata used by continuity. Choose **pose** to transfer posture without automatically copying the reference person's identity, clothing or background. Use the optional **Reference instructions** box to specify exactly what to transfer; **custom** requires a description. **Keep / ignore** is an optional collapsed detail. These choices persist with the workflow and travel with saved reference-file packs. An **all** pack also carries verified media mappings; overwrite-loading it rebuilds them against the new timeline IDs and remaps surviving links automatically. Missing media links are removed with a notice. Legacy/manual and prompt-only packs retain their authored text, but their links are not silently treated as verified. Appending prompt text or replacing files alone invalidates ambiguous old links and reports this in the status. RefMod selections and settings also survive overwrite-loading; native links to RefMod members still require destination-library review, while `<RefMod N>` aliases remain intact. Only subject references join subject groups. First/last-frame roles in endpoint modes remain actual frame anchors.
+
+For example, select **pose** and write “Use only the raised arms and stance; keep the target character's face, clothes and proportions.” Or select **custom** and write “Use the room layout and light direction, not the people.” In endpoint modes and continuity, vision models can see attached timeline pictures; new labelled REF2VA drafts use labels and instructions unless picture vision is explicitly enabled. Text-only models never see pixels. Saved RefMods contribute their descriptions, not decoded pictures; video and audio reference content is not analyzed. Prompt guidance is not dedicated skeleton/pose conditioning and does not guarantee a matching pose. During continuity, Forge also receives source-tail context and the next action; a changed source, Duration, mode or prompt invalidates an old draft. Applying only edits the continuation prompt.
+
+### RefMods (REF2VA)
+
+Put standalone or upstream v5 bundle `.safetensors` files in `ComfyUI/models/refmods/` (subfolders work). Open **REFMOD** beside Input Scaling, select a file, enable its row, adjust strength (0–1) and edit its description. Up to eight RefMod slots are supported, subject to REF2VA's final reference limits. The overlay is separate from the node; files load when opened. Workflow descriptions override embedded ones. An optional [ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod) installation can create compatible files, but is not needed for playback. This pack scales latents directly by strength rather than using upstream blur-mix behavior.
+
+**Insert RefMod #** writes its expanded native `<Picture N>`, `<Video N>`, or `<Audio N>` label and description into the prompt. Saved `<RefMod N>` aliases still resolve at queue time. A v5 bundle expands to all members in order. Disabled/zero-strength rows contribute no reference; an unresolved alias is an error. Save/Load reference packs also preserve RefMod selection.
+
+### Create a RefMod
+
+To edit a saved archive, select it in **Saved RefMod**; it loads automatically and the action changes to **Save Changes** (saves a new copy, never overwrites). Choose **Select a saved RefMod…** again to restore the normal **Create RefMod** view with the Director media lines. Loading replaces the dialog’s export selection, not the Director timeline. Supported older standalone RefMods and v5 bundles expose their individual members: edit descriptions, uncheck unwanted members, and change the overall description or concept type. Save under a new name (or leave it empty for an automatic name). Original files and retained latent values remain unchanged; no VAE is required. Saved members have no original-media preview here. Pixel content and encoded crops cannot be edited in this metadata-only path.
+
+Click **Create RefMod** beside **Save**. The separate export overlay lists inserted images, video/audio crops and populated saved RefMod slots; disabled and mode-hidden references are initially included too. Uncheck anything you do not want to save. Preview media, edit each reference description, and enter an optional filename, overall description and concept type. These texts are metadata, not learned trigger words. Concept type is descriptive; it does not select a different learning algorithm.
+
+**Create RefMod** queues only reference encoding and saving, not the Director generation, CLIP, diffusion model or sampler. Raw images/videos need the H3 video VAE; raw audio needs the H3 audio VAE. The button uses the native VAE loaders connected directly to one Director Guide. For a different loader topology, use the separate **MiniMaxH3 Create RefMod** output node. Packing existing saved RefMods requires no VAE and preserves their unweighted tensors.
+
+The exporter keeps independent Full Reference VAE latents in a single upstream-compatible v5 `.safetensors` bundle in the first configured RefMod root. It preserves selected crops and video V/A/V+A choices; video plus audio become separate members. Reference pixels keep their source aspect rather than baking the generation canvas into the file. Long/invalid crops and unsafe decoder estimates fail clearly; native H3 frame-grid adjustments are reported. Existing filenames are never overwritten.
+
+The result appears in the RefMod library but is not automatically enabled beside its raw sources. Select it explicitly for later REF2VA use and avoid duplicate conditioning. A bundle’s storage capacity does not increase generation reference limits. RefMods do not guarantee identity isolation, voice cloning or audiovisual synchronization. Closing the overlay stops previews and monitoring, not an already submitted server job; use ComfyUI queue controls to manage that job.
+
+The exporter uses the unique `DaSiWaH3RefModExport` node ID and namespaced frontend controls. It does not replace or patch another RefMod pack.
+
+## Continue an existing video (optional)
+
+Capture of new takes is **off by default**; enable **∞ Save new takes** before the initial generation if you want a checkpoint. Older active Continuity workflows migrate their saved added-frame count to Duration once, retaining next-action text and structured prompt definitions without moving action text into music. Later Duration edits remain authoritative. Save the workflow to retain migrated settings. [Older-workflow migration →](h3_continuity.md#loading-older-workflows)
+
+Choose a completed checkpoint or ordinary video using **Choose start video…**. **Continuity Active** appears automatically; Duration now means *new* seconds, not total length. The source stays pinned until you change or clear it. **∞ Save new takes** saves fresh generations as checkpoints; continuations are saved regardless. Add **H3 Continuity • Append & Stage** after sampling and **H3 Continuity • Publish Export** after your actual exporter to publish only successful exports.
+
+To save VRAM on long chains, choose **Advanced → Output → New segment only** instead: Segment Prepare/Decode then export only the newly added section, and **Join clips…** later assembles the chain without loading a model. The same dialog also joins ordinary videos, optionally with H3-generated transitions between them. [Options overview →](h3_continuity.md#which-option-to-use)
+
+```mermaid
+flowchart LR
+    G["Director Guide"] -->|positive + latent| S["Sampler"]
+    G -->|continuity_context| A["Append & Stage"]
+    S -->|sampled| A
+    A -->|cumulative_latent| E["Decode → exporter"]
+    A -->|ticket| P["Publish Export"]
+    E -->|filename| P
 ```
 
-For two endpoints (first and last frame):
-```text
-How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the {duration}.00-second mark of the target video.
+**Advanced → Keep REF2VA timeline references** is **off by default**. Continuation normally skips both endpoint-frame anchors and REF2VA timeline media so the pinned source tail drives the next segment. Turn this on if you intentionally want REF2VA image/video/audio references (and enabled RefMods) included during the continuation; it does not erase or change the saved timeline. The same switch is available directly in Forge as **Include timeline references**. When enabled, Forge sees the current reference instructions and a vision model also sees timeline pictures, separately from the chronological source-tail frames. **Structured REF2VA draft** is then selected automatically: existing definitions provide draft context and all six sections survive runtime continuation assembly. Template creation is in the Director's **Insert Prompt Structure** button during Continuity, not Forge: it retains the next-action text and carries existing definitions into the same editable prompt. New reference media still need their subject definitions authored or reviewed; Keep references alone does not describe a new character or scene. Video/audio reference content and RefMod pixels are not analyzed. For other modes, endpoint anchors remain skipped even when the option is on.
 
-integrated_multimodal_description: ...
-```
-
-Replace `{duration}` with your Director duration setting (e.g. `8.00`). Images map left-to-right by slot order: first image = Picture 1, second = Picture 2. FL2VA always uses `integrated_multimodal_description`, not `detailed_description`.
-
-### REF2VA (Reference to Video)
-
-Use when you want the generated video to borrow identity, appearance, motion, composition, or sound from existing media.
-
-- Up to 9 images, 3 videos, 3 audio clips, 12 files total.
-- Each video clip offers three modes via small buttons on its clip tile:
-  - **V** — Video only (frames as visual reference)
-  - **A** — Audio only (extract embedded audio as reference; no video frames)
-  - **V+A** — Video + embedded audio (both streams decoded with the same trim range)
-- Standalone audio clips show a waveform preview and support left/right crop markers.
-- Attach an external soundtrack file to any video; it shares the same trim window.
-- Keep at least one image or video when using audio.
-
-When a video provides audio (via A/V+A or attached soundtrack), that audio becomes `<Audio N>` in the reference numbering. Embedded audio and separate soundtracks share the same time crop as the host video frames.
-
-### Image Inpaint (single image)
-
-Use to produce a single refined/edited frame from exactly one image reference — a still, not a video.
-
-- Exactly **one** image reference; video and audio files are rejected (a video/audio in the timeline is a hard error).
-- The single image is scaled by the Input Scaling setting, then run through the native `MiniMaxH3ImageToVideo` node as a **5-frame** image-to-video pass with the image as keyframe and no last frame.
-- The Guide node routes the mode to that native call (`first_frame` set, `last_frame = None`), emitting `positive` (conditioning) + `latent`.
-- The output is a **one-frame batch**: feed the latent into a sampler/decoder, then use a **Get Image from Batch** node to extract the single result image.
-- The Director emits an `inpaint_requested` output (true in this mode, false in all others) so a graph can branch sampling/decode paths by mode. The `fl2va_requested` output is also true for every image-to-video mode (FL2VA family + Image Inpaint).
-- The resolution panel still applies (canvas drives width/height); frame rate does not (output is a single frame).
-
-## UI walkthrough: controls and buttons
-
-Open the node and read top-to-bottom.
-
-### Toolbar row
-
-- **Title label:** "MiniMax H3 Director"
-- **Model Mode buttons (left):** T2VA, I2VA, FL2VA, L2VA, REF2VA, Image Inpaint shown as small pills. Active mode has purple highlight; click to switch modes. When switching modes:
-  - Going to FL2VA hides non-image references but keeps them in memory so they reappear when you switch back.
-  - Going to REF2VA restores all previously added media.
-  - Going to Image Inpaint requires exactly one image; video/audio are blocked and the audio lane is disabled.
-- **Prompt Mode toggle:** a **Simple** / **Structured** pair next to the mode buttons switches how builder fields assemble into the final prompt (Structured keeps the labelled sections, Simple renders one flat block). The selection is persisted and restored on load.
-- **Load / Save:** save Reference Files, Prompts, or All as a pack; load the same scope by append or overwrite. Loading validates target-mode limits and missing files before changing the timeline, and restores the saved model mode.
-- **Clear button:** always visible; removes all media and prompts from the timeline. With no content it is dimmed and reports "Nothing to clear." instead of clearing.
-- **Remove button:** appears when a clip is selected; deletes that item.
-- **? button:** opens the online documentation on GitHub.
-
-### Timeline area
-
-The main workspace has separate Image, Video, and Audio lanes stacked vertically.
-
-#### Lane selection
-
-- Click anywhere on a lane to select it. The selected lane gets a highlight and displays "· selected".
-- Selection determines where pasted media goes:
-  - Select **Image**, **Video**, or **Audio**, then Ctrl+V or drop a compatible file into that lane.
-  - In REF2VA, a video set to **A** occupies the Audio lane; **V+A** presents linked video and audio references while retaining their shared trim.
-- FL2VA disables the Video and Audio lanes entirely.
-
-#### Adding media
-
-Three ways:
-
-1. **+ buttons:** each empty slot shows a "+"; click to open a file picker filtered for that lane type.
-2. **Drag-and-drop:** drag files from your OS directly onto the desired lane.
-3. **Paste:** select a lane, focus the node, press Ctrl+V with images/videos/audio on your clipboard.
-
-Each uploaded file is stored in ComfyUI's `input/` directory and linked by relative path.
-
-#### Clip tiles
-
-Each media item renders as a labeled tile inside its lane.
-
-Common elements:
-
-- **Background preview:** images show themselves; videos display their first-frame thumbnail extracted at upload time. Makes it easy to identify references visually without opening previews.
-- **Identity badge (top-left):** shows the MiniMax reference label used in prompts: `Picture 1`, `Video 2`, `Audio 1`, etc., assigned by type in timeline order.
-- **Label text:** filename, duration, current crop range (for video/audio), and a truncated preview of the media prompt if present.
-- **Selection outline:** click a tile to select it; enables the Remove button and populates the Media Prompt editor below.
-- **Drag-to-reorder:** grab a tile and move it horizontally; dropping near another slot swaps positions.
-
-Video-specific elements:
-
-- **Stream selector (top-right):** three tiny buttons:
-  - `V` — treat as video-only reference
-  - `A` — extract and use only the embedded audio track
-  - `V+A` — use both video frames and embedded audio
-- **Crop markers:** vertical lines overlaid on the clip showing the selected start/end within the source. Drag these markers left/right to adjust which portion of the source is sent to MiniMax.
-- **Crop readout:** displays current crop range vs source duration.
-
-Audio-specific elements:
-
-- **Waveform preview:** rendered canvas showing amplitude peaks across the entire source.
-- **Crop markers:** same concept as video; drag to select the 2–15 second segment to use.
-
-Images:
-
-- No trimming; treated as single-frame anchors.
-
-#### Removing/disabling items
-
-- Click a tile then hit the toolbar **Remove** button, or press Delete/Backspace while a tile is selected.
-- Items can also be disabled via the legacy list view (hidden by default).
-
-### Prompt editors
-
-Below the timeline is a unified prompt-builder panel whose layout depends on the active mode. Both editors have resizable text areas with drag-handle bars at the bottom; heights persist in the workflow JSON.
-
-#### FL2VA / I2VA / L2VA / T2VA builder
-
-Three labeled text areas:
-
-- **integrated_multimodal_description** — main scene/action/camera/environment description with optional `[Shot N]` markers. An **Insert [Shot N]** button pops up a dialog and places the marker at your cursor.
-- **overall_soundscape** — ambient sounds, dialogue, effects.
-- **non_diegetic_music** — background score or `N/A`.
-
-Alignment instruction lines (for I2VA/FL2VA/L2VA) are generated automatically based on mode and duration; you do not type them manually.
-
-#### REF2VA builder
-
-Six labeled text areas matching the official full-reference format. Section headers (`subject_definitions:` etc.) are appended automatically by the backend; you write only the content:
-
-- **subject_definitions** — define `<Subject N>`, `<Picture N>`, `<Video N>`, `<Audio N>` entries and what each contributes.
-- **summary** — task-type prefix (`[reference generation + audio reference]`) plus one-line intent statement.
-- **retention_analysis** — per-label retention markers (`fully_preserved`, `attribute_transfer`, etc.) with brief rationale.
-- **detailed_description** — shot-by-shot narrative using `[Shot N]` and timestamps.
-- **overall_soundscape** — audio environment.
-- **non_diegetic_music** — score or `N/A`.
-
-Helper buttons above the fields:
-
-- **Insert [Shot N]** — asks for a shot number, inserts `[Shot N] ` at the cursor in the `detailed_description` area.
-- **Prefill Labels & Summary** — scans your timeline items and writes initial `<Picture N>`, `<Video N>`, `<Audio N>` label lines plus a summary template referencing them. Edit freely afterward.
-- **Preview Prompt** — opens a popup showing exactly how the final prompt will look once section headers and any alignment lines are applied. Includes a copy-to-clipboard button.
-
-## Limits and validation
-
-MiniMax H3 enforces hard caps; the Director checks these before sending data downstream:
-
-- Reference clip length: minimum 2 seconds, maximum 15 seconds each.
-- Combined visual total: ≤ 15 seconds.
-- Combined audio total: ≤ 15 seconds.
-- Slot counts (REF2VA): max 9 images, 3 videos, 3 audio clips, 12 total files.
-- FL2VA: max 2 images; no video/audio allowed.
-- Path safety: all input paths resolve strictly under ComfyUI's input directory.
-
-Violations appear as red status messages inside the node. Fix them before queuing.
-
-## How processing flows: upstream and downstream
-
-Understanding the data path makes wiring and debugging easier.
-
-### Upstream inputs (what feeds into the Director)
-
-- **Resolution panel / duration / frame rate:** the Resolution panel under the mode controls drives the hidden width/height widgets. **Aspect: Auto** reads the first image or video reference and preserves its aspect; **Resolution: Auto** sets the resulting short side to 768 px. Common horizontal/vertical aspect choices plus DaSiWa MP and fixed-resolution presets are rounded to MiniMax's 16-pixel grid. Both selectors offer **CUSTOM** values for manual aspect, MP, or exact pixels. All three selectors default to **Auto**. The third **Input scaling** selector preprocesses visual references through the included DaSiWa Torch Resize implementation before they reach H3: **Off** preserves the original tensor, **Auto** preserves its aspect with a 2048-px short edge only when that would downscale the source (smaller inputs pass through unchanged), **Target - Selected Aspect & Resolution** stretches it to the selected Director canvas, and **Fit**, **Fill and crop**, **Fit and pad**, and **Long side with divisible crop** use the corresponding Torch Resize aspect modes against that canvas. Audio is never resized. When both external dimension overwrite inputs are connected, these Director calculations and preprocessing are disabled. The `frame_rate` FLOAT input (0.1–240, default 24) sets the output frame rate and is re-emitted as a `frame_rate` output for downstream nodes.
-- **Optional model sockets** (`fl2va_model`, `ref2va_model`): connect only the model matching your current mode; the Guide uses them lazily.
-- All media is managed inside the node UI (upload/paste/drop), but paths ultimately live in ComfyUI's `input/` folder.
-
-### Inside the Director
-
-On queue, the Director executes this sequence:
-
-1. Reads current mode (FL2VA-family, REF2VA, or Image Inpaint).
-2. Iterates over all enabled timeline items in slot order.
-   - For FL2VA: keeps only image items (max 2); discards others temporarily.
-   - For REF2VA: processes images, videos, and audio respecting slot limits.
-   - For Image Inpaint: accepts exactly one image reference; video/audio items are a hard error.
-3. Loads each asset:
-   - Images → resized tensors.
-   - Videos → decoded to `frame_rate` fps frame batches (default 24), cropped according to trim_start/trim_end.
-   - Audio → decoded waveforms, cropped identically.
-   - For videos in A or V+A mode → embedded audio is extracted using the same crop window.
-   - Attached soundtracks → loaded and cropped using the host video's trim range.
-4. Builds a structured `guide` dictionary containing:
-   - Mode flag, dimensions, duration, and frame rate.
-   - Ordered lists of images, videos, audios with metadata.
-   - Endpoint frames (FL2VA).
-   - Reference maps keyed as `ref_image_N`, `ref_video_N`, `ref_audio_N`, `ref_video_audio_N`.
-5. Reads the mode-specific prompt-builder state:
-   - FL2VA/I2VA/L2VA/T2VA: uses integrated_multimodal_description, overall_soundscape, non_diegetic_music fields.
-   - REF2VA: uses the six free-text sections (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music).
-   - Alignment lines (I2VA/FL2VA/L2VA) are injected automatically based on mode and duration.
-
-This `guide` object and `builder_state` are passed out to the Guide node.
-
-### The Guide node
-
-The Guide is a thin adapter between your authored timeline and ComfyUI's native H3 nodes:
-
-1. Validates the incoming `guide`:
-   - Confirms mode consistency.
-   - Checks that required models/CLIP/VAEs are connected.
-   - For REF2VA, ensures an audio VAE exists.
-2. Assembles the final prompt via the prompt-builder helper:
-   - Reads `builder_state` from the Director.
-   - For FL2VA/I2VA/L2VA/T2VA: injects alignment lines (when applicable), combines integrated_multimodal_description + overall_soundscape + non_diegetic_music into the canonical format.
-   - For REF2VA: wraps the six user-written sections with their standard headers (`subject_definitions:`, `summary:`, etc.). Legacy v1 structured-builder data is merged automatically if present.
-   - Writes the result as `resolved_prompt`.
-3. Routes to the appropriate native node:
-   - FL2VA / I2VA / L2VA / T2VA → calls `MiniMaxH3ImageToVideo` with endpoint frames and prompt.
-   - Image Inpaint → calls `MiniMaxH3ImageToVideo` with the single image as first frame, `last_frame = None`, and a fixed 5-frame length.
-   - REF2VA → calls `MiniMaxH3ReferenceToVideo` with all reference maps and prompt.
-4. Emits standard ComfyUI outputs:
-   - `positive` (conditioning)
-   - `latent` (image batch — a one-frame batch for Image Inpaint; extract the result with **Get Image from Batch**)
-   - These feed downstream samplers and decoders exactly like any other H3 workflow.
-
-You never call the native MiniMax H3 nodes directly when using Director+Guide; the Guide abstracts that away.
-
-## Model chain: patching & preview
-
-The Director's `fl2va_model` and `ref2va_model` inputs are plain `MODEL` sockets, so any node that outputs `MODEL` can sit upstream of the Director — a LoRA loader, the **MiniMax H3 Cache** patcher, **Patch Comfy Kitchen Attention**, or a KJ `ModelPreviewOverrideKJ`. This is the same forward chain you already use:
-
-```
-Checkpoint.MODEL → LoRALoader.MODEL → [KJ.model → KJ.MODEL] → Director.fl2va_model
-Checkpoint.CLIP  → LoRALoader.clip  → Director.clip
-```
-
-Three rules keep the chain valid:
-
-1. **Forward chain only — never a loop.** A patcher's output feeds *into* the Director's model input; it must never come back out of the Director. The Director is a terminal media node (it emits `frame_rate`, `duration`, `images`, never `MODEL`), and a wire from the Director back into its own model input would be a graph `dependency_cycle`, which ComfyUI's validation rejects.
-2. **One loader per model, in mode order.** The Director picks `ref2va_model` for REF2VA and `fl2va_model` otherwise; the active input must be connected (the unconnected twin may stay empty).
-3. **Type-safe wires.** ComfyUI only lets you connect type-compatible sockets, so `LoRA.MODEL → Director.fl2va_model` is legal but `LoRA.MODEL → Director.clip` is not. No name or type resolution happens at runtime — the socket you plugged in arrives as the keyword-argument named for that socket.
-
-## Dense prompting guide
-
-MiniMax H3 expects structured natural language rather than keyword piles. Use the official field names and shot/timestamp conventions.
-
-### FL2VA prompt structure
-
-Text-only (no endpoint images):
-```text
-integrated_multimodal_description: [Shot 1] ... [Shot 2] At 00:04.500, ...
-
-overall_soundscape: ...
-
-non_diegetic_music: ...
-```
-
-With endpoint images: prepend the alignment instruction line shown earlier, blank line, then the three fields above.
-
-### REF2VA prompt structure
-
-Use the six-section format. Define assets once and reuse labels consistently.
-
-Label rules:
-- `<Subject N>`: visible content abstracted from references (people, objects, scenes, clothing, actions). This is what actually appears.
-- `<Picture N>`: ONLY for concrete frame anchors (opening/key/last frame, storyboard). If an image defines style/appearance only, cite it inside a Subject and don't create a Picture entry.
-- `<Video N>`: structural roles only (editing source, continuation, pacing/cuts/rhythm). Specific subjects/actions/styles from a video belong under Subjects.
-- `<Audio N>`: copied or referenced audio signals (dialogue, music, ambience, voice timbre).
-
-Template:
-```text
-subject_definitions:
-<Subject 1> is the woman in <Picture 1>, with short dark hair and a red coat.
-<Picture 1> is the opening-frame anchor for [Shot 1].
-<Subject 2> is the walking motion taken from <Video 1>.
-<Video 1> provides the camera path and pacing structure.
-<Audio 1> is the voice-timbre reference for <Subject 1> (S1).
-
-summary:
-[reference generation + audio reference] Use <Subject 1> from <Picture 1>, the motion and pacing of <Video 1>, and the voice character of <Audio 1>.
-
-retention_analysis:
-<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - identity and clothing remain consistent.
-<Picture 1> ([Shot 1] first frame): fully_preserved - opening composition anchor.
-<Subject 2> (motion transferred to <Subject 1>): attribute_transfer - walk rhythm is applied to <Subject 1>.
-<Video 1> (pacing structure): weak_reference - general timing and camera rhythm are retained.
-<Audio 1>: reference - timbre and delivery are followed without copying the signal.
-
-detailed_description: [Shot 1] ... [Shot 2] At 00:04.500, ...
-overall_soundscape: ...
-non_diegetic_music: ...
-```
-
-Summary task-type prefixes (combine with ` + `):
-- `[keyframe completion]`, `[reference generation]`, `[video editing]`, `[video continuation]`, `[audio reuse]`, `[audio reference]`
-
-Retention markers:
-- Visual: `fully_preserved`, `partially_preserved`, `attribute_transfer`, `weak_reference`
-- Audio: `fully_copy`, `partially_copy`, `reference`, `weak_reference`
-
-Number labels by timeline order: images first (Pictures), then videos, then audio. Keep meanings stable everywhere.
-
-### Shots and timestamps
-
-- `[Shot 1]` starts without a timestamp. Later shots begin at cut times in `MM:SS.mmm`.
-- Use timestamps for actual cuts or important transitions, not every sentence.
-- Timestamps are relative to the generated output timeline; keep them within your duration and align with media timeline when relevant.
-- Single continuous shot: one `[Shot 1]` block, describe temporal changes inline.
-- Distinguish source vs target timing for references: `At 00:05.000 in the target video, reproduce the hand gesture seen near 00:02.400 in <Video 1>`.
-
-### Camera motion vocabulary
-
-Use as natural English inside shots:
-- Types: Zoom/Push/Pan/Truck/Tilt/Pedestal/Arc/Tracking/Shake/POV/Roll
-- Amplitude: `with small/large amplitude`
-- Speed: `at slow/fast speed`
-
-Example: `The camera pushes in with small amplitude at slow speed toward her hands.`
-
-### Dialogue and special tokens
-
-- Speaker IDs: `(S1)`, `(S2)` by vocal appearance order; reuse consistently.
-- Exact dialogue: `<d>[Language] ...</d>` preserving original language/punctuation.
-- Voiceover: say `in an off-screen voiceover` and specify lips remain closed after the tag.
-- Cross-cut speech: `<scenetrans>` at both sides; `<cutoff>` when truncated.
-- On-screen text: double-quote in English, preserve original characters exactly.
-
-### Practical workflow
-
-1. Choose FL2VA for endpoint/text work; REF2VA for multi-reference transfer.
-2. Add only references that contribute specific identity, motion, layout, or sound.
-3. Trim videos/audio to the strongest 2–15s segments; respect totals.
-4. Use the mode-specific prompt builder:
-   - FL2VA/I2VA/L2VA/T2VA: fill the three guided fields; alignment lines appear automatically.
-   - REF2VA: click **Prefill Labels & Summary** to scaffold your labels, then edit subject definitions and detailed description. Use **Insert [Shot N]** for clean shot markers.
-5. Click **Preview Prompt** to verify the exact output before queuing.
-6. Verify duration, aspect ratio, and motion match your references; queue through the Guide.
-
-Official MiniMax H3 guides (canonical conventions):
-- [Video Prompt Writing Guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md)
-- [Full-Reference Rewrite Format Guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md)
+Advanced also provides preferred context, session resume/New session, refresh, and **Match source settings** for checkpoint mismatches. The selected source and settings live in the saved workflow; checkpoint files live in ComfyUI output. Ordinary-video import requires both H3 VAEs, including for silent video. See [H3 Continuity](h3_continuity.md) for exact wiring, duration rounding, limits, session behavior and resource costs.

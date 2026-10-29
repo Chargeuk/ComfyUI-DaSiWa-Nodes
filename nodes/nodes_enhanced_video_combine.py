@@ -1,11 +1,15 @@
 import asyncio
 import datetime
+import gc
+import inspect
+import time
 import hashlib
 import os
 import re
 
 import torch
 from PIL import Image
+
 
 import folder_paths
 try:
@@ -16,9 +20,11 @@ except ImportError:
     PromptServer = None
 try:
     from .helper_logging import log_dasiwa
+    from .helper_batch_output import available_ram_bytes
     from . import helper_pyav_video
 except ImportError:
     from helper_logging import log_dasiwa
+    from helper_batch_output import available_ram_bytes
     import helper_pyav_video
 
 
@@ -55,9 +61,12 @@ def _preview_source_path(filename, subfolder, output_type):
     output_dir = folder_paths.get_directory_by_type("output")
     if not output_dir:
         return None
-    root = os.path.abspath(output_dir)
-    candidate = os.path.abspath(os.path.join(root, subfolder, filename))
-    if os.path.commonpath((candidate, root)) != root or not os.path.isfile(candidate):
+    try:
+        root = os.path.realpath(output_dir)
+        candidate = os.path.realpath(os.path.join(root, subfolder, filename))
+        if os.path.commonpath((candidate, root)) != root or not os.path.isfile(candidate):
+            return None
+    except (OSError, ValueError):
         return None
     return candidate
 
@@ -93,15 +102,69 @@ if PromptServer is not None:
         )
 
 
+def _reclaim_encode_ram(target_bytes):
+    before = available_ram_bytes()
+    if before >= target_bytes:
+        return before
+    try:
+        from comfy import memory_management, model_management
+    except ImportError:
+        _log("RAM pressure: native ComfyUI memory hooks unavailable.")
+        return before
+    release_cache = getattr(memory_management, "extra_ram_release", None)
+    free_pins = getattr(model_management, "free_pins", None)
+    cleanup_models = getattr(model_management, "cleanup_models", None)
+    gc.collect()
+    available = available_ram_bytes()
+    for stage in ("inactive", "pins", "active"):
+        if available >= target_bytes:
+            break
+        if stage == "pins":
+            if free_pins is not None:
+                options = {"loaded": True} if "loaded" in inspect.signature(free_pins).parameters else {}
+                free_pins(max(0, target_bytes - available), **options)
+        elif release_cache is not None:
+            release_cache(target_bytes, free_active=stage == "active")
+        gc.collect()
+        if cleanup_models is not None:
+            cleanup_models()
+        available = available_ram_bytes()
+    status = "ready" if available >= target_bytes else "still low; live inputs cannot be freed"
+    _log(f"RAM headroom: {before / 1024 ** 3:.2f} -> {available / 1024 ** 3:.2f} GiB; "
+         f"target={target_bytes / 1024 ** 3:.2f} GiB ({status}).")
+    return available
+
+
+def _encode_ram_target(images, audio, pingpong, pass_frames):
+    # Heuristic workspace allowance; opaque codec buffers are not an exact bound.
+    frame_bytes = images.shape[1] * images.shape[2] * 3 * 4
+    target = 1024 ** 3 + 16 * frame_bytes
+    if isinstance(audio, dict) and isinstance(audio.get("waveform"), torch.Tensor):
+        target += audio["waveform"].numel() * 4
+    if pass_frames and pingpong and len(images) >= 3 and images.device.type == "cpu":
+        target += 2 * images.numel() * images.element_size()
+    return target
+
+
 def detect_bit_depth(images):
     if not torch.is_floating_point(images):
         return 10 if images.element_size() >= 2 else 8
 
-    values = images.detach().to(device="cpu", dtype=torch.float32).flatten()
-    if values.numel() == 0:
+    if images.numel() == 0:
         return 8
-    if values.numel() > 250_000:
-        values = values[:: max(1, values.numel() // 250_000)]
+    source = images.detach()
+    step = max(1, (source.numel() + 249_999) // 250_000)
+    if source.is_contiguous():
+        values = source.view(-1)[::step]
+    else:
+        # Gather only the sample; flattening a strided video copies the full batch.
+        indices = torch.arange(0, source.numel(), step, device=source.device)
+        coordinates = []
+        for size in reversed(source.shape):
+            coordinates.append(indices % size)
+            indices = indices // size
+        values = source[tuple(reversed(coordinates))]
+    values = values.to(device="cpu", dtype=torch.float32)
 
     values = values.clamp(0, 1)
     error_8 = torch.mean(torch.abs(values * 255 - torch.round(values * 255)))
@@ -112,7 +175,9 @@ def detect_bit_depth(images):
 def _container_candidates(codec, container):
     if container != "Auto":
         return (container,)
-    if codec in {"AV1", "VP9"}:
+    if codec == "AV1":
+        return ("MP4", "WebM", "MKV")
+    if codec == "VP9":
         return ("WebM", "MKV", "MP4")
     return ("MP4", "MKV")
 
@@ -120,7 +185,7 @@ def _container_candidates(codec, container):
 def _auto_container_candidates(codec, container):
     if container != "Auto":
         return _container_candidates(codec, container)
-    return {"AV1": ("WebM",), "VP9": ("WebM",), "H.264": ("MP4",)}[codec]
+    return {"AV1": ("MP4",), "VP9": ("WebM",), "H.264": ("MP4",)}[codec]
 
 
 def _codec_candidates(codec):
@@ -142,7 +207,9 @@ def _animated_image_settings(container):
     return settings[:2] if settings else None
 
 
-def _animated_image_encoder_candidates(container):
+def _animated_image_encoder_candidates(container, alpha=False):
+    if alpha:
+        return ("libwebp",)  # libwebp_anim drops the alpha plane; libwebp + webp muxer keeps it
     if container == "Animated AVIF":
         return _ANIMATED_AVIF_ENCODERS
     settings = _animated_image_settings(container)
@@ -153,10 +220,11 @@ def _available_encoders(_backend=None):
     return helper_pyav_video.available_encoders()
 
 
-def _frame_arrays(images, bit_depth, pingpong):
-    frames = _pingpong_frames(images, pingpong)
-    for image in frames:
-        pixels = image[..., :3].detach().to(device="cpu", dtype=torch.float32).clamp(0, 1)
+def _frame_arrays(images, bit_depth, pingpong, alpha=False):
+    count = len(images)
+    for index in range(_encoded_frame_count(images, pingpong)):
+        source_index = index if index < count else 2 * count - 2 - index
+        pixels = images[source_index, ..., :4 if alpha else 3].detach().to(device="cpu", dtype=torch.float32).clamp(0, 1)
         if bit_depth == 10:
             yield torch.round(pixels * 1023).to(torch.int32).mul_(64).to(torch.uint16).numpy()
         else:
@@ -272,6 +340,12 @@ def _audio_file(audio):
         raise ValueError("audio must have a positive sample rate and at least one sample.")
     channels = waveform.shape[1]
     planar = waveform.permute(1, 0, 2).reshape(channels, -1).contiguous().clamp_(-1, 1).numpy()
+    if "h3_segment_interval" in audio:
+        interval = audio["h3_segment_interval"]
+        expected = helper_pyav_video.segment_sample_interval(interval, sample_rate)
+        if waveform.shape[0] != 1 or planar.shape[1] != expected:
+            raise ValueError("H3 segment audio length differs from its source sample interval.")
+        return (planar, sample_rate, interval), planar.shape[1] / sample_rate
     return (planar, sample_rate), planar.shape[1] / sample_rate
 
 
@@ -296,11 +370,12 @@ def _audio_encoder_candidates(audio_codec, container):
 def _encode_with_available_encoder(
     _backend, codec, bit_depth, width, height, frame_rate, frames, output_path,
     container, cq, crf, metadata, audio=None, audio_duration=None, crop_to_audio=False,
-    audio_codec="Auto", audio_bitrate="192k", progress_callback=None,
+    audio_codec="Auto", audio_bitrate="192k", progress_callback=None, alpha=False,
 ):
     available = _available_encoders()
     attempts = []
-    for encoder in _ENCODER_NAMES[codec]:
+    # Only libvpx writes the VP9 alpha plane; hardware VP9 encoders are colour-only.
+    for encoder in ("libvpx-vp9",) if alpha else _ENCODER_NAMES[codec]:
         if encoder not in available:
             continue
         audio_encoders = _audio_encoder_candidates(audio_codec, container) if audio else (None,)
@@ -311,7 +386,7 @@ def _encode_with_available_encoder(
                 helper_pyav_video.encode_attempt(
                     output_path, container, encoder, width, height, frame_rate, bit_depth, cq,
                     frames, metadata, audio, selected_audio_encoder, audio_bitrate,
-                    crop_to_audio, progress_callback,
+                    crop_to_audio, progress_callback, alpha,
                 )
                 if selected_audio_encoder and selected_audio_encoder != _audio_encoder(audio_codec, container):
                     _log(f"Audio fallback: {selected_audio_encoder}.")
@@ -323,17 +398,17 @@ def _encode_with_available_encoder(
     raise RuntimeError("No usable encoder was found. " + " | ".join(attempts))
 
 
-def _encode_animated_image(_backend, container, bit_depth, width, height, frame_rate, frames, output_path, quality, progress_callback=None):
+def _encode_animated_image(_backend, container, bit_depth, width, height, frame_rate, frames, output_path, quality, progress_callback=None, alpha=False):
     available = _available_encoders()
     attempts = []
-    for encoder in _animated_image_encoder_candidates(container):
+    for encoder in _animated_image_encoder_candidates(container, alpha):
         if encoder not in available:
             continue
         try:
             helper_pyav_video.encode_attempt(
                 output_path, container, encoder, width, height, frame_rate,
                 8 if container == "Animated WebP" else bit_depth, quality,
-                frames, progress_callback=progress_callback,
+                frames, progress_callback=progress_callback, alpha=alpha,
             )
             _log(f"Encoded {container} via {encoder} -> {os.path.basename(output_path)}.")
             return encoder
@@ -356,7 +431,7 @@ class DaSiWa_EnhancedVideoCombine:
             "required": {
                 "images": ("IMAGE", {"description": "Frames to encode as a video."}),
                 "frame_rate": ("FLOAT", {"default": 24.0, "min": 0.1, "max": 240.0, "step": 0.01}),
-                "codec": (_CODEC_OPTIONS, {"default": "Auto", "description": "Auto prefers browser-compatible 8-bit AV1/WebM, then VP9 and H.264 fallbacks. Choose H.265 explicitly when required."}),
+                "codec": (_CODEC_OPTIONS, {"default": "Auto", "description": "Auto prefers browser-compatible 8-bit AV1/MP4 (faststart), then VP9/WebM and H.264/MP4 fallbacks. Choose H.265 explicitly when required."}),
                 "container": (_CONTAINER_OPTIONS, {"default": "Auto", "description": "Auto tries video containers only. Select Animated WebP or Animated AVIF manually; these image animations ignore codec selection and cannot include audio."}),
                 "bit_depth": (["Auto", "8-bit", "10-bit"], {"default": "Auto"}),
                 "quality": ("INT", {"default": 20, "min": 0, "max": 51, "description": "Encoding quality for every encoder. 0 is no compression (largest files); higher values increase compression and reduce quality. 20 is the recommended default."}),
@@ -375,6 +450,7 @@ class DaSiWa_EnhancedVideoCombine:
             "optional": {
                 "audio": ("AUDIO", {"description": "Optional ComfyUI audio to mux into the encoded video."}),
                 "seed": ("INT", {"forceInput": True, "description": "Optional generation seed used to expand %seed% in filename_prefix."}),
+                "free_memory_if_needed": ("BOOLEAN", {"default": False, "tooltip": "Under RAM pressure, request native ComfyUI cache and pinned-memory release before encoding and at most every 5 seconds. May evict reusable caches. Never globally unloads GPU models or frees live IMAGE inputs; cannot guarantee swap-free encoding."}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -401,7 +477,7 @@ class DaSiWa_EnhancedVideoCombine:
         self, images, frame_rate, codec, container, bit_depth, quality, pingpong,
         save_metadata, filename_prefix, save_output, pass_frames, crop_to_audio=False, audio_codec="Auto",
         audio_bitrate="192k", log_level="Standard", save_first_frame=False, save_last_frame=False, audio=None, seed=None,
-        prompt=None, extra_pnginfo=None,
+        prompt=None, extra_pnginfo=None, free_memory_if_needed=False,
     ):
         if images.ndim != 4 or images.shape[-1] < 3:
             raise ValueError("images must be an IMAGE batch shaped [frames, height, width, channels] with RGB channels.")
@@ -413,7 +489,16 @@ class DaSiWa_EnhancedVideoCombine:
         except ImportError:
             progress_bar = None
 
+        ram_target = _encode_ram_target(images, audio, pingpong, pass_frames) if free_memory_if_needed else 0
+        last_ram_check = time.monotonic()
+        if free_memory_if_needed:
+            _reclaim_encode_ram(ram_target)
+
         def report_encode_progress(encoded_seconds):
+            nonlocal last_ram_check
+            if free_memory_if_needed and time.monotonic() - last_ram_check >= 5:
+                last_ram_check = time.monotonic()
+                _reclaim_encode_ram(ram_target)
             if progress_bar is not None:
                 progress_bar.update_absolute(min(_encoded_frame_count(images, pingpong), max(0, int(encoded_seconds * frame_rate))))
 
@@ -439,11 +524,13 @@ class DaSiWa_EnhancedVideoCombine:
                 if audio_data:
                     _log(f"{container} does not support audio; connected audio is omitted.")
                 output_path = os.path.join(output_folder, _output_filename(filename, counter, animated_settings[0], False))
+                # RGBA batches (e.g. Qwen Image 2.1 VAE) keep transparency; libwebp encodes yuva420p.
+                alpha = container == "Animated WebP" and images.shape[-1] == 4
                 encoder = _encode_animated_image(
                     None, container, selected_bit_depth, width, height, frame_rate,
-                    lambda: _frame_arrays(images, 8 if container == "Animated WebP" else selected_bit_depth, pingpong),
+                    lambda: _frame_arrays(images, 8 if container == "Animated WebP" else selected_bit_depth, pingpong, alpha),
                     output_path, quality,
-                    report_encode_progress,
+                    report_encode_progress, alpha=alpha,
                 )
                 selected_container = container
                 selected_codec = container
@@ -459,11 +546,15 @@ class DaSiWa_EnhancedVideoCombine:
                             output_folder,
                             _output_filename(filename, counter, _CONTAINER_EXTENSIONS[selected_container], audio_data is not None),
                         )
+                        alpha = images.shape[-1] == 4 and selected_codec == "VP9" and selected_container != "MP4"
+                        if alpha:
+                            selected_bit_depth = 8  # libvpx alpha is yuva420p only
                         try:
                             encoder = _encode_with_available_encoder(
-                                None, selected_codec, selected_bit_depth, width, height, frame_rate, frames,
+                                None, selected_codec, selected_bit_depth, width, height, frame_rate,
+                                lambda: _frame_arrays(images, selected_bit_depth, pingpong, alpha),
                                 output_path, selected_container, quality, quality, metadata, audio_data, audio_duration, crop_to_audio,
-                                audio_codec, audio_bitrate, report_encode_progress,
+                                audio_codec, audio_bitrate, report_encode_progress, alpha=alpha,
                             )
                             break
                         except RuntimeError as error:
@@ -486,7 +577,9 @@ class DaSiWa_EnhancedVideoCombine:
         finally:
             pass
 
-        output_frames = _pingpong_frames(images, pingpong) if pass_frames else images[:0]
+        if free_memory_if_needed and pass_frames and pingpong:
+            _reclaim_encode_ram(ram_target)
+        output_frames = _pingpong_frames(images, pingpong) if pass_frames else images.new_empty((0, *images.shape[1:]))
         if progress_bar is not None:
             progress_bar.update_absolute(_encoded_frame_count(images, pingpong))
         frame_exports = _save_frame_exports(images, output_path, save_first_frame, save_last_frame, pingpong)

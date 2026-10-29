@@ -3,6 +3,49 @@
 Pure contracts for MiniMax H3 prompt building. Adapted from ComfyUI-Fantastic-MiniMaxH3-PromptBuilder.
 """
 
+import re
+
+
+_REF_HEADINGS = {
+    "subject_definitions": "subject_definitions",
+    "summary": "summary",
+    "retention_analysis": "retention_analysis",
+    "detailed_description": "detailed_description",
+    "overall_soundscape": "soundscape",
+    "soundscape": "soundscape",
+    "non_diegetic_music": "music",
+    "music": "music",
+}
+_REF_HEADING = re.compile(
+    r"^[ \t]*(" + "|".join(_REF_HEADINGS) + r")[ \t]*:[ \t]*", re.I | re.M
+)
+
+
+def parse_ref_prompt(text: str) -> dict | None:
+    """Parse an unambiguous six-section REF2VA template, including empty fields.
+
+    Headings must begin a line; incomplete/duplicate templates or an unlabeled
+    preamble remain plain text. Return canonical builder keys, never infer content.
+    Recognized templates are bounded to 50,000 total / 12,000 per field characters.
+    """
+    if not isinstance(text, str):
+        return None
+    matches = list(_REF_HEADING.finditer(text))
+    keys = [_REF_HEADINGS[match.group(1).lower()] for match in matches]
+    if len(keys) != 6 or len(set(keys)) != 6 or text[:matches[0].start()].strip():
+        return None
+    if len(text) > 50000:
+        raise ValueError("REF2VA continuation text is too long.")
+    fields = {}
+    for index, (key, match) in enumerate(zip(keys, matches)):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        value = text[match.end():end].strip()
+        if len(value) > 12000:
+            raise ValueError(f"REF2VA {key} is too long (maximum 12000 characters).")
+        fields[key] = value
+    return fields
+
+
 # Mode definitions
 MODES = ["T2VA", "I2VA", "FL2VA", "L2VA", "REF2VA"]
 
@@ -189,9 +232,11 @@ def _ref_field_values(state: dict) -> dict:
     }
 
 
-def build_ref_prompt(state: dict) -> str:
-    """Generate the structured (sectioned) REF2VA prompt."""
+def build_ref_prompt(state: dict, *, preserve_empty: bool = False) -> str:
+    """Generate the structured REF2VA prompt; optionally retain empty music."""
     v = _ref_field_values(state)
+    if preserve_empty:
+        v["music"] = _ensure_str(state.get("ref", {}).get("music"))
     return (
         f"subject_definitions:\n{v['subject_definitions']}\n\n"
         f"summary:\n{v['summary']}\n\n"
@@ -255,14 +300,14 @@ def has_builder_content(state: dict) -> bool:
         return False
     if _ensure_str(state.get("simple_prompt")):
         return True
-    if _ensure_str(state.get("imd")) or _ensure_str(state.get("soundscape")):
+    if _ensure_str(state.get("imd")) or _ensure_str(state.get("soundscape")) or _ensure_str(state.get("music")) not in ("", "N/A"):
         return True
     ref = state.get("ref")
     return isinstance(ref, dict) and (
         any(_ensure_str(ref.get(key)) for key in (
             "subject_definitions", "summary", "retention_analysis",
             "detailed_description", "soundscape",
-        )) or bool(ref.get("subject_defs")) or bool(ref.get("retention"))
+        )) or _ensure_str(ref.get("music")) not in ("", "N/A") or bool(ref.get("subject_defs")) or bool(ref.get("retention"))
     )
 
 
@@ -415,6 +460,16 @@ def validate_builder_state(state: dict) -> list[dict]:
 
     if mode == "REF2VA":
         ref = state.get("ref", {})
+        if _prompt_mode(state) == "simple":
+            # A typed or pasted prompt lives in simple_prompt, not the ref fields
+            # (only Forge's Apply fills those). Check its sections when it is the
+            # six-part template; plain prose is a valid REF2VA prompt as it is.
+            try:
+                ref = parse_ref_prompt(_ensure_str(state.get("simple_prompt")))
+            except ValueError:
+                ref = None
+            if ref is None:
+                return issues
         # Check both v2 and legacy v1 keys.
         has_summary = bool(_ensure_str(ref.get("summary")) or _ensure_str(ref.get("summary_text")))
         if not has_summary:

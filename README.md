@@ -1,43 +1,98 @@
 # DaSiWa Custom Nodes Collection
 
-A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control.
+A high-performance collection of custom nodes for ComfyUI, optimized for video workflows, resolution management, and logic control. Its installed version is shown in **ComfyUI → Settings → About**.
+
+Use **ComfyUI → Settings → Other → DaSiWa → ...** to enable or disable extra settings.
 
 [📰 News & Changelog — release notes and complete change history across the collection →](docs/news_and_changelog.md)
 
 ## Included Nodes
 
-### 🎬 MiniMax H3 Director
+### 🎬 MiniMaxH3 Director
 
-Timeline-based authoring for MiniMax H3 generation workflows. Separate Image/Video/Audio lanes, drag-and-drop/paste/upload, per-clip trims, save/load packs, and structured prompt builders.
+> 🎬 MiniMaxH3 Director — The Ultimate One-Stop Video Creation Pipeline: Experience the most advanced, feature-complete MiniMaxH3 Director node available for ComfyUI. Built as a comprehensive production hub, it seamlessly merges timeline-based multi-modal authoring, intelligent LLM/VLM Prompt Forge assistance, deep RefMod persona control, and high-precision continuity extensions into a single, unified workflow. Whether starting from text, images, or an existing H3 video, the Director serves as your central command deck for end-to-end synchronized video and audio generation.
 
-![MiniMax H3 Director](assets/DaSiWa-MiniMaxH3-Director.png)
+![MiniMaxH3 Director](assets/DaSiWa-MiniMaxH3-Director.png)
+![MiniMaxH3 Director](assets/DaSiWa-MiniMaxH3-Director-PromptForge.png)
+![MiniMaxH3 Director](assets/DaSiWa-MiniMaxH3-Director-RefMod.png)
 
-- 🎥 **Modes:** FL2VA (T2VA/I2VA/L2VA, 2 image slots), IMAGE INPAINT (1 image → single frame via 5-frame pass), REF2VA (9 img / 3 vid / 3 audio = 12 total; V/A/V+A switch per video)
-- 📸 **REFMOD references:** saved image/video/audio RefMods and upstream v5 bundles from `models/refmods/` — overlay selector, strength scaling, workflow-local descriptions, `<RefMod N>` stable aliases resolved at runtime to native reference labels.
-- 🔀 **Reference handling:** drag-reorder between slots, external soundtracks per video, visual crop via draggable markers, incompatible media preserved on mode toggle
-- 📋 **Paste & upload:** lane selection + Ctrl+V paste into chosen lane, drag-and-drop from file manager, paste-replace onto selected tile
-- ✍️ **Prompt builders:** FL2VA/I2VA/L2VA guided fields; REF2VA six-section builder with Insert [Shot N], Insert RefMod #, Prefill Labels & Summary, Preview Prompt (shows resolved `<RefMod N>` → native labels + description block); Simple/Structured toggle persisted
-- 📐 **Resolution panel:** Aspect/Resolution/Input Scaling selectors (all default Auto) on 32px grid; grouped dropdowns; CUSTOM values; Torch Resize preprocessing (Off/Auto/Target/Fit/Fill/Fit+pad/Divisible crop)
-- 💾 **Save/Load packs:** reference files + prompt + RefMod selections persisted independently; append or overwrite with limit validation and missing-file checks
-- 🎬 **Video thumbnails:** first-frame preview behind each video clip tile
-- ⏱️ **Crop preview:** ▶ Play crop button, draggable preview range
-- 🔒 **Validated limits:** 2–15s reference windows, 15s max combined visual/audio duration, path-safety under ComfyUI input directory
-- 🧩 **Native routing & lazy loading:** hands validated data to built-in MiniMaxH3 nodes; only selected model requested; REF2VA binds native inputs by name for Core-order compatibility
-- ⚙️ **External overwrite inputs:** `external_prompt_overwrite` (STRING), `external_width_overwrite` + `external_height_overwrite` (INT) bypass Director canvas sizing
-- 🎞️ **Frame rate:** FLOAT input (0.1–240, default 24) with matching output for downstream nodes
+- 🎥 **H3 modes:** T2VA/I2VA/L2VA/FL2VA in the two-image endpoint family (first/last-frame interpolation); REF2VA (9 images, 3 videos, 3 audio files; 12 total); Image Inpaint (one image → single output frame via a 5-frame pass).
+- 🖼️ **Reference Director:** separate image/video/audio lanes; drag-reorder slots, per-media prompts, external soundtracks, embedded-video V/A/V+A switch; incompatible media retained when changing modes.
+- 📋 **Media input:** lane-selected Ctrl+V, file-manager drag-and-drop, paste-replace on a selected tile; first-frame video thumbnails and audio waveforms.
+- ⏱️ **Reference trims:** draggable crop markers and preview range, ▶ Play crop; full-file audio amplitude preview; audio/video previews with highlighted crop, draggable live playhead and source-time readout; 2–15s per reference window and ≤15s combined visual / ≤15s combined audio, with input-path validation.
+- 📸 **RefMods:** image/video/audio files and upstream v5 bundles from `models/refmods/`; overlay selection, strength scaling, workflow-local descriptions, runtime `<RefMod N>` → native-label resolution.
+- ✍️ **Prompt editor:** one free-text field per mode; optional structure, shot/RefMod insertion and reference-label prefill; legacy prompts migrate into that field.
+- 👥 **Forge Cast & People boxes:** find or draw character boxes; editable character/place/style/pose cards, automatic vision reading with a saved opt-out; explicit Idea/Shot changes retain priority. Cards persist in workflows; manual descriptions work without vision.
+- ✨ **Prompt Forge:** review/apply H3 drafts from `models/llm`, Ollama or an OpenAI-compatible server. REF2VA picture buttons combine character, place, style and frame roles, with optional ordered people selections (left/right, top/bottom or front/back; no order picked means the numbers say who is in the picture, not where); Pose and Custom remain exclusive; image-only labelled drafts need no writer vision, while mixed references retain the full REF2VA path. Choose Auto or 1–5 shots with optional per-shot descriptions; continuity retains vision context and inherited definitions. [Model setup and limitations →](docs/minimax_h3_director.md#prompt-forge-optional).
+- ♾️ **Continuity (opt-in):** extend a completed 24-fps H3 video/audio take from a pinned latent checkpoint; Duration controls added seconds, new-take capture is opt-in; separate next-action prompt, explicit source advancement, optional Forge draft. [Wiring and limits →](docs/h3_continuity.md).
+- 📐 **Smart resolution:** Auto/custom aspect, resolution and megapixel presets; input scaling via Torch Resize (Off/Auto/Target/Fit/Fill/Fit+pad/Divisible crop).
+- 💾 **Save/Load packs:** reference files, prompt and RefMod selections; append/overwrite with mode-limit and missing-file checks.
+- 📦 **Create & edit RefMods:** beside Save, export selected media as a reusable v5 safetensors bundle with crop previews, editable descriptions and concept metadata—no sampler or additional pack required. Selecting a saved RefMod loads its members automatically; **Save Changes** saves an edited copy without re-encoding or overwriting the original. Reset the picker to return to the media-line creation view. [Usage →](docs/minimax_h3_director.md#create-a-refmod).
+- 🧩 **Native H3 routing:** Director + Guide forward to built-in H3 nodes; selected-model lazy loading and name-bound REF2VA inputs; optional prompt and width/height overwrite sockets.
+- 🎞️ **Frame rate:** 0.1–240 FLOAT input (default 24) and matching output for downstream nodes; Image Inpaint outputs a still.
+- ⚡ **Optional performance node:** MiniMaxH3 Cache patches the connected model; cache storage supports CUDA/CPU fallback. It is a separate node, not a Director mode.
+- 💎 **Optional output processing:** MiniMaxH3 Enhanced Upscale performs latent upscale and per-step diffusion refinement in one node. RTX Upscaler & Refiner offers pixel-space denoise/deblur/VSR upscale; Watermark Overlay adds branding; Enhanced Video Combine encodes/muxes audio and previews output.
 
 [Full documentation, UI guide, and prompting reference →](docs/minimax_h3_director.md)
 
 ---
 
-### ⚡ MiniMax H3 Cache
+### 🔍 MiniMaxH3 Enhanced Upscale
+
+One node that upscales a completed MiniMax H3 video/audio latent and refines it with per-step diffusion, keeping the original audio.
+
+- Independent `spatial_tiling` (diffusion) and `temporal_chunking` (upscale + refinement), both on by default. Refinement uses tile-local H3 coordinates and a preferred automatic layout capped at 2.1 MP per tile. If that layout cannot fit the memory estimate, smaller spatial tiles are planned down to the existing 512px floor; no additional tile controls or wiring are needed.
+- **Memory Planning** defaults on with a **Memory Reserve (%)** slider: 0–100%, in 5-point steps, default 5% after device/model reserves. Off bypasses estimated diffusion-budget rejection at your own OOM risk, without disabling tiling/chunking, ComfyUI memory management or host RAM checks. The legacy MB cap is hidden but preserved for saved/API workflows. A single full-canvas tile uses native sampling; appended inputs preserve existing widget slots. The aggressive default is not a VRAM guarantee and can change automatic plans and seeded results.
+- Learned safetensors upscaling from `models/latent_upscale_models/`, or `interpolation`; no automatic choice, no fallback.
+- Optional **Spike Guard**, default off: detects and softly corrects unusually strong local latent deviations after learned upscale, before refinement. Separate detection threshold, correction strength and artifact-pattern direction controls; experimental, checkpoint-specific and not a general image-quality fix.
+- Factor-only scaling (default **2.0**), refinement defaults CFG 1, 1 step, denoise 0.2 (`0` skips refinement). Native packed video/audio `LATENT` output; the original audio stream is returned unchanged.
+- Optional Director guide + H3 video VAE re-encode endpoint images at the enlarged resolution; works without a Director.
+- Director **Image Inpaint** is supported as its complete five-frame I2V pass, with interpolation or learned upscale and optional refinement. Decode and extract the still afterward; arbitrary source denoise masks remain unsupported.
+- Continuity: keep Append & Stage before the upscaler and feed it the cumulative latent.
+
+[Upscaler wiring, sockets, checkpoint selection and limits →](docs/minimax_h3_tiled_upscale.md) · [Continuity setup, source import and timing →](docs/h3_continuity.md)
+
+---
+
+### 🧩 Tiled Diffusion (Image)
+
+MODEL patch for SD/SDXL/Flux-family image checkpoints: every sampling step denoises overlapping tiles (default 1024 px, 128 px overlap) and blends them with positive pyramid weights, so a model samples canvases far larger than its native size without seams. Wire it between the loader and the sampler; ControlNet is not supported. [Details →](docs/tiled_diffusion.md)
+
+---
+
+### MiniMaxH3 Continuity • Segment Prepare
+
+- **Inputs:** sampler `LATENT` and the matching Guide `continuity_context`; select **New segment only** in Director Advanced.
+- **Outputs:** bounded `render_latent`, matching `segment_context`, publication `ticket`.
+- **Storage:** original-resolution root plus immutable new-token deltas; no repeated full-timeline checkpoint per extension.
+
+### MiniMaxH3 Continuity • Segment Decode
+
+- **Inputs:** local render latent, native H3 video/audio VAEs and **Segment Prepare.segment_context**.
+- **Outputs:** only the new visible `IMAGE` frames and synchronized `AUDIO`; optional Enhanced Upscale goes before this node.
+- **Compatibility:** full-timeline output remains the default; keep every delta's parent checkpoint.
+
+### MiniMaxH3 • Join Clips
+
+![Director clip assembly dialog](assets/DaSiWa-H3-Join-Clips.png)
+
+- **Selection:** Director **Join clips…** dialog for ordered Continuity exports or independent uploaded videos; separate from reference media.
+- **Execution:** isolated model-free queue job; H.264/AAC re-encode at 24 fps, with explicit preflight confirmation.
+- **H3 transitions:** optional per-cut bridge rendered with the Director's own Guide, model and sampler; clip ends act as H3 guides, only the new middle is inserted.
+- **Limits:** matching 8-bit SDR, 24-fps canvases; transitions need Director → Guide → one sampler wiring.
+
+[Which option to use →](docs/h3_continuity.md#which-option-to-use) · [Segment wiring, clip selection, storage and media limits →](docs/h3_continuity.md#continuity-output-full-timeline-or-new-segment)
+
+---
+
+### ⚡ MiniMaxH3 Cache
 
 An approximate, model-scoped whole-block-stack residual cache for ComfyUI's native MiniMax H3 model.
 
 - **MODEL PATCH:** clones only the connected MiniMax H3 `MODEL`; no global model-class monkey patch.
 - **CONTROLLED REUSE:** sampled audio/video-token relative-L1 threshold, 15–90% sampling window, and a bounded number of consecutive cache hits.
 - **STORAGE:** auto / CUDA / CPU cached-residual storage with CPU fallback if automatic storage runs out of VRAM.
-- **COMPATIBILITY:** preserves ComfyUI block replacements and transformer options; can be chained with **Patch Comfy Kitchen Attention**.
+- **COMPATIBILITY:** preserves ComfyUI block replacements, transformer options, and model-scoped optimized-attention overrides.
 - **PDD HEAD BANK:** works with ComfyUI's PDD LoRA head bank (0.34+). The node passes the PDD sigma-schedule arguments automatically, so cache and PDD coexist with no extra setup.
 - **PER-TOKEN MASKS:** honors per-token video and audio denoise masks, running masked rows at their own strength exactly like Core, so cached and region-masked generations match Core quality.
 - **QUALITY:** approximate optimization—higher cache thresholds trade fidelity for more skipped block-stack evaluations.
@@ -46,36 +101,66 @@ An approximate, model-scoped whole-block-stack residual cache for ComfyUI's nati
 
 ---
 
-### 🔥 Patch Comfy Kitchen Attention
+### 🏷️ Lable (DaSiWa)
 
-A one-input model patch that swaps the connected model's attention backend to Comfy Kitchen INT8 attention at runtime.
+Workflow-only labels for the classic canvas and Nodes 2.0. Add **Lable (DaSiWa)** from **DaSiWa / utilities**, then double-click it to edit.
 
-- **Model-scoped:** clones only the connected `MODEL` and sets its optimized-attention override; it never monkey-patches ComfyUI globally.
-- **Safe fallback:** if Comfy Kitchen INT8 attention is unavailable in your ComfyUI build, it falls back to the ComfyUI default attention and logs the decision.
-- **Chainable:** works before or after **MiniMax H3 Cache** — both are model-clone patches and compose in either order.
+- Font previews, alignment, rotation, independent text/background opacity, and sliders with editable numbers.
+- 48 color swatches, RGB picker, editable HEX values, and a screen-eyedropper icon. Native ComfyUI node colors respect label opacity.
+- Embedded PNG/JPEG/WebP images: auto-scaled background, floating beside text, or above/below text. Images travel with saved workflows.
+- Drag, resize, fit to text, and pin/click-through. No rgthree dependency, server route, or execution node.
 
-```text
-MiniMax H3 Model Loader
-          │
-          ▼
-MiniMax H3 Cache ──► Patch Comfy Kitchen Attention ──► Guider / Sampler
-```
+[Full documentation and compatibility →](docs/lable.md)
+
+---
+
+### ♾️ Seamless Loop
+
+![Seamless Loop](assets/DaSiWa-Seamless-Loop.png)
+
+One `IMAGE` batch in, one `IMAGE` batch out. Choose native **RIFE / FILM** (default) or **RTX Frame Generation** for the loop transition.
+
+- Automatic trim/overlap selection using PSNR/MSE, local SSIM, edges, temporal differences and exposure analysis.
+- Bidirectional pair interpolation, eased overlap morphing and bounded local color correction; original middle frames remain unchanged.
+- RIFE/FILM selects a native safetensors checkpoint from `models/frame_interpolation/`. RTX uses NVIDIA VFX without that checkpoint, with LOW/MEDIUM/HIGH quality (HIGH default) and a CUDA device selector.
+- `exact_endpoint` is off by default for continuous cyclic playback; enable it only when identical first/last pixels are required.
+- Native interpolation needs no additional dependency; RTX requires a supported NVIDIA GPU and `nvidia-vfx` with VideoFrameGeneration. This does not multiply the whole video's FPS. Output duration can change; audio must be aligned downstream.
+- Visible seams may remain with incompatible motion or scene changes; residual temporal discontinuities are logged.
+
+[Usage, model compatibility and references →](docs/seamless_loop.md)
 
 ---
 
 ### 💎 RTX Upscaler & Refiner
 
-State-of-the-art image and video enhancement using NVIDIA RTX Video SDK. It executes up to three sequential passes (Denoise, Deblur, and Upscale) in a single node, processing frame-by-frame to keep VRAM usage predictable and low.
+NVIDIA RTX Video SDK enhancement with Denoise, Deblur and VSR/High Bitrate upscaling. Processing uses bounded frame windows and produces one standard ComfyUI `IMAGE` batch.
 
 - **Refine:** Independent Denoise and Deblur passes (both off by default).
-- **Upscale:** AI-powered VSR and High Bitrate upscaling.
+- **Upscale:** VSR for typical compressed sources and High Bitrate for clean, high-bitrate/lossless sources; SDK-supported Streaming modes.
+- **SDK-aware options:** Available effects and parameters are detected from the installed SDK. Optional RGB10A2 10-bit processing and per-pass strengths preserve the legacy default path; no automatic SDK installation.
+- **TrueHDR (opt-in):** Final SDR → BT.2020/PQ conversion, also usable on its own. IMAGE does not carry HDR metadata; correct HDR encoding/tagging must be provided downstream, and Enhanced Video Combine HDR export is not yet verified.
+- **Alpha and diagnostics (opt-in):** Preserve alpha through matching crop/resize, or check small samples for invalid pixels and suspected SDR channel collapse. Both are off by default.
+- **Compatibility:** Keeps its own DaSiWa node ID and existing workflow inputs/outputs, without replacing the official NVIDIA VFX nodes. Frame count/FPS stay unchanged; RIFE remains separate.
 - **Smart Sizing:** Multiple resize modes including Constant Megapixel targets.
-- **Efficiency:** Frame-by-frame processing for minimal VRAM usage.
-- **Memory Control:** The output batch is allocated lazily (like the reference NVIDIA node — the kernel decides, no up-front memory pressure, no temp file). A disk-backed (mmap) fallback (`use_mmap`, off by default) is opt-in for very long video batches: when enabled it is the last tier of the VRAM -> RAM -> disk chain, taken only when available RAM is still short after automatic model unloading (`auto_unload_models`, on by default). **Warning:** enabling `use_mmap` writes a multi-giB `.mmap` temp file to your temp drive for the whole run.
+- **Efficiency:** Internal `chunking` (on, 16 frames by default) bounds processing intermediates; the final output remains a single `IMAGE` batch.
+- **Lossless output storage:** `lossless_fp16` (on by default) uses FP16 only if every output value round-trips exactly and memory headroom permits; typical VSR output remains FP32.
+- **Memory Control:** Full input and output batches still scale with video duration and may be cached by ComfyUI; internal chunking is not constant-memory streaming. GPU output is budgeted with a conservative per-frame/SDK working reserve and a 24 GiB output cap; RAM output is capacity-checked and aborts clearly if insufficient. `torch.empty` avoids zero-fill, not the full storage requirement. Optional `use_mmap` enables a disk-backed last resort (off by default); `auto_unload_models` requests target-device ComfyUI memory reclamation under pressure, not global model unloading.
 
 ![RTX_UpscalerRefiner.png](assets/RTX_UpscalerRefiner.png)
 
 [Full documentation →](docs/rtx_upscaler_refiner.md)
+
+### 🎞️ RTX Frame Generation
+
+![RTX Frame Generation](assets/RTX_FrameGeneration.png)
+
+- **Interpolation:** Multiplier 2–16 or one frame at a chosen timestep; preserves every original frame and both endpoints. Multiplier output: `(N-1)*M+1` frames, encode at **source FPS × M**.
+- **Quality and cuts:** **HIGH by default**, with MEDIUM/LOW alternatives; automatic scene-cut detection and an explicit cut override.
+- **Precision:** RGB8 by default; optional SDK-supported RGB10A2 10-bit SDR. Not HDR; alpha is discarded.
+- **Memory:** Bounded pair staging, budgeted VRAM/RAM, native memory reclamation under pressure and opt-in disk-backed output. Complete frame batches still need storage.
+- **Workflow:** IMAGE batches only; decode videos upstream and route audio separately. Non-midpoint timesteps have unequal temporal spacing. Requires SDK `VideoFrameGeneration`.
+
+[Frame generation controls, timing and limits →](docs/rtx_frame_generation.md)
 
 ---
 
@@ -154,7 +239,7 @@ The **Advanced LoRA Loader** is a 10-slot stacker for ordinary image/video LoRAs
 The **DaSiWa Metadata Image Saver** ensures your images are fully compatible with Civitai, Hugging Face, and other galleries by embedding A1111-style metadata. It automatically detects LoRAs used in the workflow and supports dynamic filenames.
 
 - **Civitai Compatibility:** Writes the standard `parameters` block for auto-parsing of prompts and resources.
-- **LoRA Detection:** Scans your workflow and appends `<lora:name:weight>` triggers automatically.
+- **LoRA Detection:** Scans your workflow and appends `<lora:name:weight>` triggers plus `Lora hashes` (v0.5.29) — Civitai links LoRAs and checkpoints only by hash.
 - **WebP Support:** Full "Drag-and-Drop" workflow reconstruction support for both PNG and WebP formats.
 - **Dynamic Filenames:** Use placeholders like `%seed%`, `%date%`, `%model%`, `%width%`, and `%height%`.
 - **Privacy:** Toggle workflow JSON embedding to share images without exposing your full graph.
@@ -169,13 +254,16 @@ The **DaSiWa Metadata Image Saver** ensures your images are fully compatible wit
 
 Converts an `IMAGE` batch into a high-quality video with optional `AUDIO` muxing and an in-node VHS-style preview.
 
+- **Optional RAM reclamation:** `free_memory_if_needed` (default off) requests native ComfyUI cache/pinned-memory release only under pressure, before encoding and at five-second wall-clock intervals. It does not globally offload GPU models or free the live input batch.
+
 ![DaSiWa Enhanced Video Combine](assets/DaSiWa-Enhanced-Video-Combine.png)
 
-- **Codecs:** Auto (AV1 → VP9 → H.264), or explicit AV1 / VP9 / H.264 / H.265(HEVC). Hardware-first encoder chain (NVENC → QSV → AMF → VAAPI → software); mandatory H.264/MP4 fallback.
+- **Codecs:** Auto (AV1/MP4 → VP9/WebM → H.264/MP4), or explicit AV1 / VP9 / H.264 / H.265(HEVC). Hardware-first encoder chain (NVENC → QSV → AMF → VAAPI → software); mandatory H.264/MP4 fallback.
 - **PyAV-native encoding (v0.4.40):** Encoding, audio muxing, metadata, animated outputs, and preview transcoding run through PyAV 18 and its bundled FFmpeg libraries without launching external processes. Hardware encoders are tried first and failed or unavailable devices fall back to software encoders.
 - **Seekable previews (v0.4.40):** Every generated video receives one-second keyframes. MP4 outputs use fast-start metadata. AV1, VP9, HEVC, 10-bit, and other compatibility previews are cached as ordinary H.264/AAC files served with HTTP byte-range support, so browsers can pause and scrub reliably. Downloads remain the unchanged original codec/container.
-- **Containers:** Auto-selects per codec (WebM/MKV/MP4 for AV1/VP9; MP4/MKV for H.264/H.265).
+- **Containers:** Auto codec uses AV1/MP4 → VP9/WebM → H.264/MP4. With an explicit codec and container Auto: AV1 tries MP4 (faststart) → WebM → MKV; VP9 keeps WebM → MKV → MP4; H.264/H.265 keep MP4 → MKV. Explicit container selections remain unchanged.
 - **Animated images:** Animated AVIF (GPU AV1 or software) and Animated WebP (`libwebp_anim`). Looping, no audio.
+- **Transparency (v0.5.25):** RGBA batches (for example from the Qwen Image 2.1 VAE) keep their alpha channel in Animated WebP and in VP9 WebM/MKV. Alpha needs the CPU encoders (`libwebp`, `libvpx-vp9`, 8-bit); every other format drops alpha.
 - **Bit depth & quality:** Auto-detects 8-bit vs 10-bit source precision; Auto codec forces 8-bit 4:2:0. CRF/CQ-based quality slider (default 20).
 - **Audio muxing:** Opus/AAC/MP3 selectable; Auto uses Opus (WebM) or AAC (MKV/MP4). Bitrates 64–320k. Optional crop-to-audio.
 - **In-node preview:** Framed player with native hover-reveal controls and hover-to-unmute audio; an optional Mute checkbox keeps the preview permanently silent, and both Autoplay and Mute are remembered with the node. Streamed H.264 transcoding for AV1/H.265 where needed.
@@ -229,16 +317,18 @@ IMAGE ────────────────────────�
 
 ### 🖥️ System Monitor
 
-A compact system telemetry bar integrated directly into the ComfyUI top toolbar. The adjacent DaSiWa settings button lets you hide the monitor or choose its display mode.
+A compact telemetry bar that defaults to its own row below ComfyUI's top controls; switching to Ultra compact docks a small card on the right.
 
 - **Multi-GPU Support:** Separate metrics per GPU device (NVIDIA, AMD, Intel) labeled as GPU0, GPU1, etc.
 - **Resource Metrics:** CPU, RAM, SWAP/Pagefile, DISK, GPU Utilization, GPU VRAM, and GPU Temperature.
 - **Visual Feedback:** Color-coded borders and proportional background fills (0–100%) for instant at-a-glance assessment.
-- **Lite / Full Modes:** Lite is the default compact toolbar view; Full shows every available metric with detailed values and a live 60-second graph.
-- **Responsive Layout:** Lite automatically hides lower-priority metrics when toolbar space is limited; Full is a scrollable panel that adapts to narrow screens. Each Lite chip sizes to its label and value (`max-content`) so text never clips, at any resolution, font, or DPI.
+- **Lite / Ultra compact / Full Modes:** Lite defaults to a top toolbar row; Ultra compact switches to a right-docked card with every enabled metric visible; Full shows detailed values and live 60-second graphs.
+- **Resizable Lite Bar:** Drag its corner horizontally; meters keep their size and wrap into new rows as the bar narrows. Reset to the default Lite bar from its menu.
+- **Dock or Float:** The default is a separate top row; Ultra compact switches to the right. Either mode can then be docked elsewhere or floated. Placement and Lite width persist across reloads.
+- **Viewport-Aware Menu:** The settings menu opens toward available screen space; separate background and drawing/text/lines opacity sliders are also available in ComfyUI Settings.
 - **Cross-Platform:** Works on Linux and Windows with automatic fallback detection for GPU tools.
 - **Container-safe:** In containers and sandboxes where parts of `/proc` are missing (e.g. `/proc/vmstat`), probes degrade to `n/a` instead of warning every second. Set `DASWA_SYSTEM_MONITOR=0` (also `false`/`no`/`off`/`disable`) to fully stop the backend polling thread.
-- **Independent Placement:** Renders as its own toolbar element, not dependent on third-party extensions.
+- **Free Memory Button:** Separate DaSiWa-logo button stays beside the top controls regardless of monitor placement. Free VRAM unloads ComfyUI models; Free System RAM also resets its execution cache. Free Both explicitly requests both actions (same cleanup as Free System RAM, retained for compatibility). Hide it independently under **Settings → Other → DaSiWa → Free Memory**.
 
 **Lite mode**
 
@@ -247,6 +337,10 @@ A compact system telemetry bar integrated directly into the ComfyUI top toolbar.
 **Full mode**
 
 ![DaSiWa_System_Monitor-full.png](assets/DaSiWa_System_Monitor-full.png)
+
+**Ultra-Compact mode**
+
+![Ultra compact system monitor](assets/DaSiWa_System_Monitor-ultracompact.png)
 
 [Full documentation →](docs/system_monitor.md)
 
@@ -269,7 +363,7 @@ Bridge any string/text node through **DaSiWa Random String Picker** to randomize
 
 ### 🎯 Seed Control
 
-**Seed Control** extracts the MiniMax H3 Director's seed panel into a standalone node — the same seed UX for any workflow, without a Director in the graph.
+**Seed Control** extracts the MiniMaxH3 Director's seed panel into a standalone node — the same seed UX for any workflow, without a Director in the graph.
 
 - **Full 64-bit seeds:** unsigned `0..0xFFFFFFFFFFFFFFFF` seed field, matching the H3 seed space.
 - **Random|Fixed switch:** one segmented switch (a single control, Pixaroma style) — Random rolls a fresh seed on every queue, Fixed keeps the current seed for repeatable results; **New** rolls a fresh seed and keeps the selected mode, **Use Last** restores the previous seed and flips to Fixed. Stepping, typing, and the switch all lock the seed as Fixed.
@@ -303,15 +397,16 @@ Bridge any string/text node through **DaSiWa Random String Picker** to randomize
 
 ---
 
-### 🧠 LLM / VLM Analyze
+### 🧠 LLM Prompt Writer & Analyze
 
 The **DaSiWa LLM / VLM nodes** let you run local transformers chat or vision-language models from inside a ComfyUI workflow. They accept native `STRING` inputs and native `IMAGE` batches from nodes such as Load Image or VHS frame loaders.
 
 - **Native ComfyUI Inputs:** Analyze connected text, still images, or video/image-sequence frame batches.
-- **Prompt Presets:** Custom system instructions, LTX-2.3/Wan2.2 video prompt enhancement, and image/video caption presets for mixed tags, tag-only, or natural language.
+- **Prompt Writer:** Simple node for Anima, Illustrious, Krea2, Wan 2.2, LTX 2.3 and YuE2 (separate Song Style, Lyrics and Instrumental Style presets), with an unchanged user prefix, style, detail, creativity and optional reference pictures.
+- **Prompt Presets:** Editable model-specific guides plus shared H3 rewriting, custom instructions and existing caption/video presets; output without segment scaffolding.
 - **Memory Modes:** Keep models cached for speed, or use full cleanup to unload DaSiWa and ComfyUI managed models before/after analysis so later image/video models recover VRAM/RAM.
 - **Frame Sampling:** Limit video analysis with max frames, stride, frame strategy, resize controls, context limits, and optional KV-cache reduction.
-- **Local, GGUF, or Loopback Ollama Models:** Load already-installed Transformers folders, local GGUF through llama.cpp, or call Ollama on `127.0.0.1`. Runtime model downloads, custom remote model code, and arbitrary Ollama URLs are disabled so a workflow cannot make the ComfyUI server fetch code or send requests to an attacker-chosen service.
+- **Local and External Models:** Load already-installed Transformers folders or GGUFs, keep the legacy loopback Ollama mode, or use operator-configured OpenAI-compatible/Ollama servers. Endpoints and credentials stay outside workflow JSON; runtime downloads and custom remote model code remain disabled. The Director and LLM nodes share backend implementations without changing Director settings or workflows.
 
 [Full documentation →](docs/llm_nodes.md)
 
@@ -337,6 +432,14 @@ The **DaSiWa LLM / VLM nodes** let you run local transformers chat or vision-lan
 
 Search for **DaSiWa-Nodes** and install.
 
+### Repository contents versus local data
+
+The repository ships `assets/` screenshots, `docs/`, `data/` starter libraries, `nodes/` and `js/`. The former example `workflows/` and in-repository test suites were retired; they are not part of the current package or its push workflow. A formerly bundled Spectrum v0.2.20 compatibility patch targeted a separate project, was never applied by this pack, and is no longer shipped.
+
+Runtime files do **not** belong in the node pack repository: `lorainfo/` is a regenerable Civitai metadata cache; `.hermes/`, `.projectatlas/`, `graft/`, Python bytecode and test caches are local tooling state. H3 Continuity checkpoints live in the ComfyUI **output** directory at `output/df_h3_continuity/` (not beside `nodes/`); browser video previews live in ComfyUI's **temp** directory. The root-level `input/`, `output/`, `temp/`, `models/`, and `cache/` are ignored as safeguards if someone uses this checkout as a ComfyUI base directory. The `.gitignore` rules prevent *new* matching files being staged; they do not remove files already tracked or delete anyone's local files.
+
+A commit on local or Gitea `main` does not automatically appear on the separate GitHub remote; publishing to each remote is a separate action.
+
 ---
 
 ## Credits
@@ -344,5 +447,5 @@ Search for **DaSiWa-Nodes** and install.
 - The RTX implementation in this collection is based on the excellent work by [Deno2026/comfyui-deno-custom-nodes](https://github.com/Deno2026/comfyui-deno-custom-nodes).
 - Lora-Loader is based on [Brojakhoeman/Loradaddyloaderltx](https://github.com/Brojakhoeman/Loradaddyloaderltx/tree/main).
 - Ideas for Watermark Overlay are inspired by [Artificial-Sweetener/comfyui-WhiteRabbit](https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit)
-- MiniMax H3 Director was inspired by the LTX Director concept from [whatdreamscost](https://github.com/whatdreamscost)
-- MiniMax H3 Director RefMod integration (saved person references, `.safetensors` latent format, strength scaling) is based on the design and file format established in [Luisacaotica/ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod). The DaSiWa implementation was contributed by [kasimalperenyavuz-design](https://github.com/kasimalperenyavuz-design) in [PR #45](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/45). It is standalone — no runtime dependency on the upstream pack — but both can be installed side-by-side and share the same RefMod files in `models/refmods/`.
+- MiniMaxH3 Director was inspired by the LTX Director concept from [whatdreamscost](https://github.com/whatdreamscost)
+- MiniMaxH3 Director RefMod integration (saved person references, `.safetensors` latent format, strength scaling) is based on the design and file format established in [Luisacaotica/ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod). The DaSiWa implementation was contributed by [kasimalperenyavuz-design](https://github.com/kasimalperenyavuz-design) in [PR #45](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/45). It is standalone — no runtime dependency on the upstream pack — but both can be installed side-by-side and share the same RefMod files in `models/refmods/`.

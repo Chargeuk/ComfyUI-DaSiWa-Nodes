@@ -1,3 +1,4 @@
+import atexit
 import json
 import os
 import re
@@ -94,6 +95,192 @@ def _nvidia_gpus(run=_run):
             "temperature": _number(temperature),
         })
     return gpus
+
+
+class _NvmlSession:
+    """One NVML session for the life of the process, reused for every sample.
+
+    Spawning ``nvidia-smi`` every second opens a new NVML session each time. Under Docker
+    Desktop / WSL2 on Windows each session opened in the guest leaks NVIDIA driver memory
+    on the host that is only reclaimed by a reboot (~23 allocations per ``nvidia-smi
+    --query-gpu`` call, ~14 per nvmlInit/nvmlShutdown pair, none for queries on an open
+    session). Polling through one persistent session avoids that and the process spawns.
+    """
+
+    RETRY_SECONDS = 600  # a failed init is retried rarely: every attempt opens a session
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._nvml = None
+        self._handles = []
+        self._static = []
+        self._failed_at = None
+
+    def _ensure(self):
+        with self._lock:
+            if self._nvml is not None:
+                return self._nvml
+            if self._failed_at is not None and time.monotonic() - self._failed_at < self.RETRY_SECONDS:
+                return None
+            pynvml = None
+            initialized = False
+            try:
+                import pynvml  # provided by nvidia-ml-py
+
+                pynvml.nvmlInit()
+                initialized = True
+                handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(pynvml.nvmlDeviceGetCount())]
+                self._static = [
+                    (_nvml_text(pynvml.nvmlDeviceGetName(h)), _nvml_text(pynvml.nvmlDeviceGetUUID(h)))
+                    for h in handles
+                ]
+                self._handles = handles
+                self._nvml = pynvml
+                return pynvml
+            except Exception:  # no nvidia-ml-py, no NVIDIA driver, or NVML error
+                if initialized:
+                    # Close a session whose device enumeration failed, so a later retry does
+                    # not leave a second session open.
+                    try:
+                        pynvml.nvmlShutdown()
+                    except Exception:
+                        pass
+                self._handles, self._static = [], []
+                self._failed_at = time.monotonic()
+                return None
+
+    def gpus(self):
+        """Returns NVIDIA GPU samples, or None when NVML is unavailable (caller falls back)."""
+        nvml = self._ensure()
+        if nvml is None:
+            return None
+        gpus = []
+        for index, (handle, (name, identifier)) in enumerate(zip(self._handles, self._static)):
+            memory = _probe(lambda: nvml.nvmlDeviceGetMemoryInfo(handle), None)
+            used_bytes = memory.used if memory is not None else UNKNOWN
+            total_bytes = memory.total if memory is not None else UNKNOWN
+            gpus.append({
+                "id": f"NVIDIA:{index}", "index": index, "vendor": "NVIDIA", "name": name,
+                "uuid": identifier,
+                "utilization": _number(_probe(lambda: nvml.nvmlDeviceGetUtilizationRates(handle).gpu, UNKNOWN)),
+                "memory_used": used_bytes, "memory_total": total_bytes,
+                "memory_percent": _percent(used_bytes, total_bytes),
+                "temperature": _number(_probe(
+                    lambda: nvml.nvmlDeviceGetTemperature(handle, nvml.NVML_TEMPERATURE_GPU), UNKNOWN)),
+            })
+        return gpus
+
+
+def _nvml_text(value):
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
+_NVML_SESSION = _NvmlSession()
+
+
+def _nvidia_telemetry():
+    gpus = _NVML_SESSION.gpus()
+    return _nvidia_gpus() if gpus is None else gpus
+
+
+class _AdlxSession:
+    """AMD telemetry on Windows through ADLX, kept open for the life of the process.
+
+    ``rocm-smi`` and ``amdsmi`` have no Windows build, so without ADLX an AMD card only
+    gets the static CIM entry. ADLX ships with the AMD driver; ``amd-adlx`` provides the
+    Python binding.
+    """
+
+    RETRY_SECONDS = 600
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._helper = None
+        self._perf = None
+        self._gpus = []
+        self._static = []
+        self._failed_at = None
+        self._unavailable = False
+
+    def _ensure(self):
+        if self._helper is not None:
+            return True
+        if self._unavailable:
+            return False
+        if self._failed_at is not None and time.monotonic() - self._failed_at < self.RETRY_SECONDS:
+            return False
+        try:
+            from adlx import ADLX  # provided by amd-adlx
+        except Exception:
+            self._unavailable = True
+            return False
+        helper = ADLX.ADLXHelper()
+        if _probe(helper.Initialize, None) != ADLX.ADLX_RESULT.ADLX_OK:  # no AMD driver
+            self._unavailable = True
+            return False
+        if _probe(lambda: self._open(helper), False):
+            self._helper = helper
+            atexit.register(self.close)
+            return True
+        self._perf, self._gpus, self._static = None, [], []
+        _probe(helper.Terminate, None)
+        self._failed_at = time.monotonic()
+        return False
+
+    def _open(self, helper):
+        system = helper.GetSystemServices()
+        gpus = list(system.GetGPUs())
+        self._static = [(str(g.PNPString()), str(g.Name()), int(g.TotalVRAM()) * 1024 * 1024) for g in gpus]
+        self._perf = system.GetPerformanceMonitoringServices()
+        self._gpus = gpus
+        return True
+
+    def close(self):
+        # Interfaces still alive when ADLX is torn down crash the interpreter on exit,
+        # so they are dropped before Terminate.
+        with self._lock:
+            helper, self._helper = self._helper, None
+            self._perf, self._gpus = None, []
+            if helper is not None:
+                _probe(helper.Terminate, None)
+
+    def gpus(self):
+        """Returns AMD GPU samples, or None when ADLX is unavailable (caller falls back)."""
+        with self._lock:
+            if not self._ensure():
+                return None
+            gpus = []
+            for index, (gpu, (identifier, name, total_bytes)) in enumerate(zip(self._gpus, self._static)):
+                support = _probe(lambda: self._perf.GetSupportedGPUMetrics(gpu), None)
+                metrics = _probe(lambda: self._perf.GetCurrentGPUMetrics(gpu), None)
+                used_bytes = _adlx_metric(support, metrics, "GPUVRAM")
+                if used_bytes is not None:
+                    used_bytes *= 1024 * 1024
+                gpus.append({
+                    "id": f"AMD:{identifier}", "index": index, "vendor": "AMD", "name": name,
+                    "uuid": identifier, "utilization": _adlx_metric(support, metrics, "GPUUsage"),
+                    "memory_used": used_bytes, "memory_total": total_bytes,
+                    "memory_percent": _percent(used_bytes, total_bytes),
+                    "temperature": _adlx_metric(support, metrics, "GPUTemperature"),
+                })
+            return gpus
+
+
+def _adlx_metric(support, metrics, name):
+    # An unsupported metric still returns a value, just a meaningless one.
+    if support is None or metrics is None:
+        return UNKNOWN
+    if not _probe(getattr(support, f"IsSupported{name}"), False):
+        return UNKNOWN
+    return _number(_probe(getattr(metrics, name), UNKNOWN))
+
+
+_ADLX_SESSION = _AdlxSession()
+
+
+def _amd_telemetry():
+    gpus = _ADLX_SESSION.gpus() if os.name == "nt" else None
+    return _amd_gpus() if gpus is None else gpus
 
 
 def _rocm_value(data, field):
@@ -234,7 +421,7 @@ class DaSiWaSystemMonitor:
             return gpus
 
     def gpu_info(self):
-        gpus = _probe(_nvidia_gpus, []) + _probe(_amd_gpus, [])
+        gpus = _probe(_nvidia_telemetry, []) + _probe(_amd_telemetry, [])
         if os.name == "nt":
             vendor_telemetry = {gpu["vendor"] for gpu in gpus}
             gpus.extend(gpu for gpu in self._windows_gpus_cached() if gpu["vendor"] not in vendor_telemetry)
@@ -344,12 +531,21 @@ class DaSiWaSystemMonitor:
             "gpus": self.gpu_info(),
         }
 
+    @property
+    def running(self):
+        return bool(self._thread and self._thread.is_alive())
+
     def start(self):
-        if self._thread and self._thread.is_alive():
+        if self.running:
             return
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="DaSiWaSystemMonitor", daemon=True)
         self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread and self._thread is not threading.current_thread():
+            self._thread.join(timeout=self.interval + 1)
 
     def _run(self):
         while not self._stop.is_set():
@@ -359,13 +555,32 @@ class DaSiWaSystemMonitor:
 
 
 monitor = DaSiWaSystemMonitor()
-if PromptServer is not None and _monitor_enabled():
-    monitor.start()
+if PromptServer is not None:
+    if _monitor_enabled():
+        monitor.start()
 
     @PromptServer.instance.routes.get("/dasiwa/system-monitor")
     async def system_monitor_snapshot(request):
+        if not monitor.running:
+            return web.json_response({"error": "System Monitor is disabled."}, status=503)
         return web.json_response(monitor.snapshot())
 
     @PromptServer.instance.routes.get("/dasiwa/system-monitor/gpus")
     async def system_monitor_gpus(request):
+        if not monitor.running:
+            return web.json_response({"error": "System Monitor is disabled."}, status=503)
         return web.json_response(monitor.gpu_info())
+
+    @PromptServer.instance.routes.post("/dasiwa/system-monitor/enabled")
+    async def system_monitor_enabled(request):
+        try:
+            enabled = (await request.json()).get("enabled")
+        except (AttributeError, ValueError, json.JSONDecodeError):
+            return web.json_response({"error": "Expected a JSON enabled boolean."}, status=400)
+        if not isinstance(enabled, bool):
+            return web.json_response({"error": "Expected a JSON enabled boolean."}, status=400)
+        if enabled:
+            monitor.start()
+        else:
+            monitor.stop()
+        return web.json_response({"enabled": monitor.running})

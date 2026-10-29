@@ -2,9 +2,161 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers the last two months: **2026-06-29 → 2026-09-19**. The first commit in this window is from 2026-07-05; older history lives in the git log. All entries are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-10-21**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **Enhanced Video Combine: explicit AV1/Auto fix (Git update within 0.5.33):** explicitly choosing AV1 with container Auto now also prefers MP4 (faststart), retaining WebM → MKV as alternatives and the final H.264/MP4 fallback. VP9 and explicit container choices are unchanged. Regression tests cover selection/fallbacks plus real CPU AV1 MP4 encode/decode with and without AAC audio. No version bump.
+
+- **Enhanced Video Combine: Auto outputs AV1 in MP4 (0.5.33):** Auto now prefers 8-bit AV1 inside MP4 with faststart, so browser tabs and streaming seek immediately; VP9 → WebM and H.264 → MP4 stay as automatic fallbacks and explicit codec/container picks are untouched. Auto audio is AAC. The redundant `Help` button under the preview is gone — the `?` on the node title opens the same dialog.
+- **Seed Control: poller stops with the node (0.5.33):** deleting a Seed Control node now clears its external-socket poll interval instead of leaking it for the rest of the session.
+
+- **Tiled Diffusion (Image) (0.5.32):** new MODEL patch node for ordinary image checkpoints. Every sampling step denoises overlapping tiles (default 1024 px, 128 px overlap) and blends the predictions with positive pyramid weights, so SD/SDXL/Flux-family models sample canvases far larger than their native size without seams. Written from the pack's own H3 tiled sampler; ControlNet is not supported. [Details →](tiled_diffusion.md)
+- **Wildcard build over HTTP (0.5.31):** `POST /dasiwa/wildcard-preset-prompt-builder/build` takes the node's rules (`style`, `seed`, `reroll`, `token_budget`, `selection_state`) and returns the resolved positive/negative strings, so apps outside the graph such as DEAS can hand the picked wildcards to the Prompt Writer.
+- **Metadata Image Saver: model hash cache survives restarts (0.5.31):** the auto-detected model/LoRA SHA256 is stored in `user/dasiwa_model_hashes.json` (keyed by path, size and mtime), so a 26 GB model is hashed once (~18 s) instead of after the last sampling step of the first image of every backend start.
+
+- **Prompt Writer over HTTP (0.5.30):** `POST /dasiwa/llm/write` runs the LLM Prompt Writer's dialects (Anima, Illustrious, Krea2, Wan 2.2, LTX 2.3, YuE2) with the H3 Forge's model picker and backends, including vision on input- or output-folder pictures (`name [output]`, as LoadImage), so apps outside the graph such as DEAS reuse the same guides and clean-up. The Forge model list now also returns the H3 durations.
+
+- **Metadata Image Saver: LoRA hashes and detected sampler values (0.5.29):** the `parameters` block now carries A1111 `Lora hashes: "name: autov2"` for every detected LoRA, because civitai.com links resources only by hash, never by name. Fix: auto-detected Steps, CFG and Seed from the linked sampler were overwritten by the manual defaults (`0`) and saved as `Steps: 0, CFG scale: 0.0, Seed: 0`; `0` now means "prefer auto-detect" as documented.
+
+- **Sample-exact Opus segment export (0.5.28):** Segment Decode carries the exact segment interval into Enhanced Video Combine. Opus resamples H3 audio directly to 48 kHz, and the exporter corrects only the bounded sample-grid rounding remainder before encoding. Publish keeps its strict duration checks; ordinary audio without a segment interval is not stretched to video length. No workflow rewiring is needed.
+
+- **Continuity subgraph validation fix (0.5.27):** New segment only checks ComfyUI's compiled prompt, so valid Segment Prepare/Decode chains inside subgraphs and bypassed upscalers are accepted without a full-timeline fallback. Saving a workflow no longer runs execution validation. Advanced output hints explain full-timeline versus new-section export with the same wiring.
+
+- **Join Clips review fixes (Git update within 0.5.26):** Restore H.264 side-data compatibility and sample-exact joined audio duration with PyAV 18 and 19, keep inactive Continuity from blocking ordinary takes, preserve Core decoding and audio normalization for uncaptured Full timeline takes, reject oversized transition joins before rendering, and avoid leftover partial files after copy preflight errors. Transition guides resize edge frames before retaining batches and check host RAM before allocation. No new controls or version bump.
+
+- **Lossless video copy in Join Clips (0.5.26):** new opt-in checkbox *Copy video without re-encoding when possible*. When all clips share codec, encoder settings and keyframe cuts (e.g. a continuity chain from one workflow), the video is copied bit-for-bit and only the audio is re-encoded; otherwise the join re-encodes as before and says why. [Details →](h3_continuity.md#join-exported-clips)
+
+- **Transparent WebP and WebM (0.5.25):** Enhanced Video Combine keeps the alpha channel of RGBA batches in Animated WebP and VP9 WebM/MKV (CPU encoders, 8-bit). Animated WebP files now loop forever as intended, and the `quality` slider now applies to WebP (it was silently ignored). [Details →](enhanced_video_combine.md#transparency)
+
+- **One wiring for both Continuity modes (0.5.24):** Segment Prepare and Segment Decode now also run **Full timeline** (identical to Append & Stage + core VAE decoding), so a workflow wired once can switch between Full timeline and New segment only in the Director. Segment exports may now pass through spatial post-processing (upscale, resize, watermark) before the exporter. [Usage →](h3_continuity.md#which-option-to-use)
+
+- **H3 transitions in Join Clips (0.5.23):** The Join clips dialog can render a short H3 bridge for every cut between uploaded videos. It reuses the Director's Guide, model and sampler: the clip edges become native H3 video+audio guides, only the generated middle is inserted, then the usual model-free join runs. New nodes MiniMaxH3 • Transition Guide/Render work in API mode too. Overlay fields now have labels, source/selected durations and Remove. [Usage →](h3_continuity.md#join-exported-clips)
+
+- **H3 segments and Join Clips (0.5.22, Gitea testing):** Opt-in segment-only Continuity uses immutable AV deltas and bounded source-tail rendering, with separate Segment Prepare/Decode nodes. The Director adds one contextual Join clips dialog for Continuity chains or uploaded videos; assembly is a model-free H.264/AAC re-encode with explicit preflight confirmation. Full-timeline workflows remain the default. CPU Core/codec contracts and real isolated classic/Nodes 2.0 queue tests are covered; pretrained seam quality and peak-VRAM savings remain live-test gates. AI repair of independent clip transitions is not released. [Usage and limits →](h3_continuity.md#continuity-output-full-timeline-or-new-segment)
+
+- **RefMod export fix (10-15, 0.5.21):** RefMod bundle saving fsyncs the temporary file with a read-write descriptor (`'rb+'`), fixing the Windows `OSError: [Errno 9] Bad file descriptor` that prevented exports from being saved.
+
+- **Director RefMod creation & editing (10-15, 0.5.20):** Create RefMod beside Save exports selected media as an independent v5 safetensors bundle through an isolated queue job. Selecting a supported saved standalone RefMod or v5 bundle loads its members automatically; edit bundle/member descriptions and concept type, deselect members, then **Save Changes** creates a new copy without re-encoding or overwriting the original. Reset the picker to restore the Director media-line creation view. Stored latents remain usable for generation; original media files are not embedded for preview. Includes the 0.5.19 export work below. Git publication is separate from Registry acceptance. [Usage →](minimax_h3_director.md#create-a-refmod)
+
+- **Director RefMod export (0.5.19 development, included in 0.5.20):** Adds Create RefMod beside Save with a separate media-preview/settings overlay, selection and editable reference descriptions. A namespaced output node encodes selected references and saves a no-overwrite v5 safetensors bundle through an isolated queue job; no sampler, additional RefMod pack or automatic duplicate conditioning. Preserves crops and stream choices; concept texts are metadata, not model training. [Usage →](minimax_h3_director.md#create-a-refmod)
+
+- **Forge and frontend update (0.5.18):** Publishes the Cast/People-box work and subsequent safety fixes to GitHub and Gitea. Explicit history selection can reapply a saved prompt after editing or applying another prompt, but changed source, references, mode, duration, canvas or model connections still require a fresh compatible draft. Advanced LoRA Loader uses native DOM controls for sharp text at canvas zoom, with bounded info/clear buttons and hover feedback. Video Combine supports fullscreen and reliable preview seeking; the renderer fixes below are included. Git publication triggers the existing Registry workflow; Registry acceptance and real model adherence are separate checks.
+
+- **Forge review fixes (Git update within 0.5.17):** Protects edited cards during renumbering, excludes stale automatic appearances from Generate, serializes Find people with drafting, preserves warm-model cleanup after preparation errors and carries the existing adult-only policy through reader/card insertion. No additional version bump or GitHub/Registry publication.
+
+- **H3 Forge Cast and People boxes (0.5.17, Gitea testing):** Integrates PR #78–#80 from @yoimtrashgaming-prog: mode-gated media, growing Who buttons, Pose takers, editable people boxes and character/place/style/pose cards. Automatic Cast reading defaults on with a saved opt-out; no-vision stops automatic retries, queued reads are cancellable, stale replies are discarded, and explicit Idea/Shot changes override conflicting card traits. Existing canvas/shot policy, dialogue, Continuity, native conditioning and node interfaces remain. Backend contracts and classic/Nodes 2.0 workflow roundtrips are tested with mocked LLM transport; real model adherence remains a live-test gate. This is a Git testing update, not a tagged or Registry-approved release. [Usage →](minimax_h3_director.md#prompt-forge-optional)
+
+- **Frontend fixes (Git update after 0.5.16):** Director manual prompt edits survive switching between a Continuity source and No source. Advanced LoRA Loader mounts its existing stack editor in both renderers; Prompt Writer keeps the prefix compact while the idea grows, Wildcard Builder retains its scroll panel, and Enhanced Video Combine exposes Help in Nodes 2.0. Saved node IDs and backend inputs remain unchanged; no package version bump.
+
+- **H3 reserve slider (0.5.16):** Enhanced Upscale exposes Memory Planning and a 0–100% Memory Reserve slider in 5-point steps, default 5%. Turning planning off bypasses estimated diffusion-budget rejection at the user's OOM risk; independent split settings, native memory management and host RAM guards remain active. The legacy MB cap is hidden but retained, and the appended slider preserves old workflow slots. The aggressive default is not a universal OOM guarantee.
+
+- **H3 Image Inpaint upscale (10-13, 0.5.15):** Enhanced Upscale accepts the Director's complete five-frame I2V pass instead of rejecting its guide mode. Interpolation and learned latent upscale support optional native diffusion refinement and start-image re-encoding; decode and extract the still afterward. Source denoise masks and video-only Continuity restrictions remain unchanged. Native CPU tests exercise the short sequence with full-canvas/tiled sampling and small random learned checkpoints; pretrained visual quality is a separate validation. [Wiring →](minimax_h3_tiled_upscale.md#image-inpaint)
+
+- **H3 Forge next-action priority (10-12, 0.5.14):** A nonblank continuation idea takes priority over the old action draft and reference instructions. Structured history contributes subject identity only; plain history is used as past-scene evidence when tail images are unavailable, including text-only retries after rejected images. Near-identical generated actions trigger an advisory warning, not an Apply block or automatic retry. Empty ideas retain the existing natural-continuation/current-draft path. [Usage and limits →](h3_continuity.md#forge-next-action-priority)
+
+- **Seamless Loop RTX backend (0.5.13):** Adds opt-in RTX Frame Generation transition interpolation, LOW/MEDIUM/HIGH quality (HIGH default) and CUDA device selection. Native RIFE/FILM remains the default; existing widget positions and exact-endpoint behavior stay unchanged. RTX needs no RIFE/FILM checkpoint and does not multiply video FPS. Small real RTX 5090 tests cover overlap/short bridges, CPU/CUDA input and default/custom caller streams. [Usage and limits →](seamless_loop.md)
+
+- **Enhanced Video Combine memory use (10-12, 0.5.12):** Frame-wise pingpong encoding without a reversed batch copy; bit-depth detection samples before CPU/float32 conversion, including strided inputs. Disabled frame passthrough retains no source storage. Adds default-off `free_memory_if_needed` for pressure-triggered native cache/pinned-memory reclamation before encoding and at five-second wall-clock intervals. Live inputs remain allocated; no global GPU offload or swap-free guarantee. [Memory use and limits →](enhanced_video_combine.md#memory-use-on-long-videos)
+
+- **Director audio/video preview (10-12, 0.5.12):** Full-file audio amplitude waveform; audio and video previews share highlighted crop, draggable endpoints/range, draggable/keyboard playback cursor and source-time readout. Play crop waits for readiness/seek completion and uses a local media Blob if HTTP seeking is refused. Reuses timeline peaks; browser decoding combines channel peaks without cancelling stereo signals. Closing the preview stops playback and releases visual resources. Fixes a queued-pause race that could disable the Play crop end boundary. [Usage →](minimax_h3_director.md#work-in-the-timeline)
+
+- **YuE2 Prompt Writer presets (0.5.11):** Adds separate Song Style, Lyrics and Instrumental Style targets, also available in Advanced Analyze. Editable guides keep musical instructions and sung words separate; detail/creativity are music-aware, visual styles are ignored, and lyric prefixes use line breaks. Existing widgets, defaults and single-STRING output stay unchanged. ABC planning, duration and instrumental score conversion remain downstream. [Usage →](llm_nodes.md#yue2-presets)
+
+- **H3 memory planning (10-11, 0.5.10):** Enhanced Upscale adds default-on `enforce_memory_budget`, appended after existing widgets/callable parameters. Planning retains model/device/buffer accounting with 25% rather than 35% workspace headroom; disabling enforcement permits attempts beyond the diffusion estimate while retaining split settings and host RAM/spike guard checks. Single full-canvas plans use native sampling. Existing saved values stay in place; automatic geometry and seeded outputs can differ. Adapted from [PR #76](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/76), thanks to @sherics. [Controls and limits →](minimax_h3_tiled_upscale.md)
+
+**Public release 0.5.9 consolidates the changes below.** Earlier intermediate development versions 0.5.10–0.5.12 were consolidated into 0.5.9; the new 0.5.10–0.5.16 entries above are subsequent updates, not those earlier development snapshots. Includes full RTX hover help, refreshed RTX node screenshots and the Frame Generation HIGH default; obsolete Director progress JSON removed. Forge preview is vertically resizable.
+
+- **RTX RAM-pressure cleanup and Free Both (0.5.9):** Both RTX nodes reclaim native execution caches and releasable model pins before rejecting a RAM output allocation, then re-check the safety budget. No running-executor reset or global GPU offload into RAM; cache eviction needs ComfyUI RAM-pressure cache support. The memory toolbar adds **Free Both**, retaining existing Free System RAM behavior. Full input/output batches still require storage.
+
+- **RTX Frame Generation (0.5.9):** Adds separate pair-based interpolation with multiplier 2–16 or specific timestep, LOW/MEDIUM/HIGH quality (HIGH default), cut controls and optional RGB10A2. Preserves originals/endpoints; bounded staging, targeted pressure reclamation, opt-in mmap and cancellation cleanup. Visible RTX names drop the DaSiWa prefix while old upscaler registration/interface/JavaScript IDs stay unchanged. No minimum SDK dependency bump. Small real RGB8/RGB10A2 tests cover CPU/CUDA input and default/custom caller streams; native custom-stream -12 is avoided through synchronized default-stream calls. [Timing and limits →](rtx_frame_generation.md)
+
+- **H3 opt-in Spike Guard (0.5.9):** Enhanced Upscale adds experimental correction of strong local latent deviations after learned upscale, default off. Single-sign or either-sign artifact-pattern detection, sensitivity and strength are optional; frame-wise FP32 work avoids a full-output FP32 copy. Guard memory is budgeted, loops are cancellable, and diagnostics report the actual changed pixel bounds/latent frames. Current tile planner, Continuity accounting and original audio are retained. Pretrained visual quality still needs same-latent comparison renders. [Options and limits →](minimax_h3_tiled_upscale.md)
+
+- **RTX SDK-aware enhancement (10-10, 0.5.9):** RTX Upscaler & Refiner adds optional RGB10A2 10-bit processing, per-pass strengths, available Streaming modes and a final TrueHDR pass. SDK capabilities determine availability; old DaSiWa workflow interfaces and official NVIDIA VFX node coexistence are retained. HDR outputs normalized BT.2020/PQ values, not an automatically tagged HDR video. High Bitrate guidance is corrected for clean/lossless sources. [Options and limits →](rtx_upscaler_refiner.md)
+
+- **H3 local-tile refinement and video RefMod fixes (10-09, 0.5.8):** Enhanced Upscale uses native tile-local H3 coordinates and prefers the Talon V2 automatic layout under a 2.1 MP tile cap. If the preferred geometry cannot fit the estimate, smaller spatial tiles remain available. Existing sockets, Director/CFGGuider integration, protected Continuity prefix and original audio are retained; pending Continuity guides are reserved in planning. Video RefMods use native 2 fps Qwen sampling with matching timestamps while retaining the full DiT reference latent. No new controls. [Wiring and limits →](minimax_h3_tiled_upscale.md)
+
+- **Automatic LLM backend settings (10-09, 0.5.7):** Prompt Writer and Advanced LLM nodes automatically use the saved DaSiWa LLM server settings in single-user mode, without a launcher opt-in. Local GGUF/Hugging Face models, Ollama models and OpenAI-compatible server models remain available together. Nested local discovery now lists all sibling model folders and GGUFs. Environment endpoints retain priority and endpoint/key pairing; multi-user workflows use environment configuration. [LLM guide →](llm_nodes.md)
+
+- **H3 Forge reference roles (0.5.4):** Integrates PR #70 and #71 with combined picture roles, ordered character selection, frame-only character vision descriptions and updated REF2VA definitions/retention. Preserves Director canvas and shot policy, literal dialogue, legacy labels and draft persistence; fixes button preview invalidation and generation locks.
+
+- **H3 target-grid planning (10-07, 0.5.3):** Replaces dimension halving with a joint 32px tile/native temporal-window search. Chooses the fewest model forwards, then least repeated video work including actual edge/temporal overlaps; keeps the 512px floor and independent switches. Cropped keyframes are budgeted per tile, with full-target buffers and chunk-anchor reserve. Reports estimated calls and work; not a measured GPU runtime or VRAM guarantee.
+
+- **H3 upscale planning and independent switches (0.5.2):** Adds default-on `spatial_tiling` for diffusion and `temporal_chunking` for learned upscale/refinement, independently selectable. Disabled paths stay disabled; insufficient estimated refinement budgets fail early. Dynamic/offloaded weights are budgeted as reclaimable residency plus a streaming reserve instead of requiring the full checkpoint in VRAM. Includes 512px minimum tiles, audio/target-grid conditioning and full-window buffer accounting. Existing workflows retain both enabled.
+
+- **Prompt Writer rename (10-06, 0.5.1):** The LLM Prompt Writer node is now displayed as **LLM Prompt Writer** without the DaSiWa prefix. The saved node ID `DaSiWa_LLMPromptWriter` and all interfaces are unchanged, so existing workflows keep loading.
+
+- **MiniMaxH3 Enhanced Upscale release (10-06, 0.5.0):** Publishes the single-node learned latent upscale/interpolation and internally scheduled per-step tiled refinement. Includes hardware-aware precision selection, factor-only sizing, original audio preservation, optional Director endpoint re-encoding, cumulative-timeline Continuity integration and default-off soft refine mask with adjustable strength. Consistent MiniMaxH3 display names preserve legacy node IDs. README diagrams, checkpoint/imported-video hints, CLI plan reporting and upstream credits are included. Native CPU sampling and tensor contracts are tested; pretrained visual seam quality is not guaranteed. [Usage and limits →](minimax_h3_tiled_upscale.md)
+
+- **Continuity soft refine (0.4.84):** Optional default-off smoothstep video mask with 0–1 strength ramps refinement over the existing Continuity source-tail overlap. Global indexing preserves the mask across temporal windows; old prefix/audio stay protected. No RGB color matching or guaranteed flicker correction.
+
+- **MiniMaxH3 naming and workflow guide (0.4.83):** Consistent MiniMaxH3 display names for Director, Guide, Cache, Enhanced Upscale and Continuity companions, preserving all saved/API node IDs and interfaces. README adds Mermaid views for standalone upscale, Director integration, Continuity assembly and checkpoint/imported-video source choices, with resolution and usage hints.
+
+- **H3 Enhanced Upscale (0.4.82):** Renamed the visible node without changing its saved-workflow ID. Optional Continuity context aligns native AV tail conditioning with Append & Stage’s cumulative timeline. The entire clip is upscaled; diffusion refinement is limited to the source-tail overlap and continuation, leaving earlier scenes out of the continuation prompt. Audio, duration and source-resolution checkpoint ownership are preserved.
+
+- **H3 Upscale controls (0.4.81):** Factor-only sizing replaces exact width/height overrides. Learned-upscaler precision can be selected as auto, BF16, FP16 or FP32; auto follows the ComfyUI device/backend policy, and the plan reports the actual dtype. Removed the external sigma input so the node always owns its refine schedule, defaulting to CFG 1, 1 step and denoise 0.2.
+
+- **H3 Tiled Upscale (0.4.80):** One standalone node combines H3 learned latent upscale/interpolation with model-scoped per-step spatial diffusion and phase-aligned temporal windows. Conservative planning derives tile/chunk geometry from latent, target canvas, conditioning and device memory. Optional Director endpoint images + video VAE are re-encoded at target size; input audio is returned unchanged. No bbaudio runtime dependency, extra parameter nodes or workflow rewrites. Full-model visual quality remains subject to comparison renders. [Wiring and limits →](minimax_h3_tiled_upscale.md)
+
+- **Prompt Writer and opt-in Forge vision (10-05, 0.4.78):** Integrates PR #67 and #68 with editable model prompting guides, the simple LLM Prompt Writer and optional labelled REF2VA vision. Workflow Settings fallback requires operator opt-in and is disabled in multi-user mode; endpoint/key sources stay paired. Server model discovery is cached and off-thread. Numeric prompt weights and user prefixes are preserved. Forge vision uses a consistent output contract, warns on incomplete descriptions, and invalidates drafts when toggled; mixed references retain the normal path. Existing node IDs and old blind drafts remain compatible. [LLM guide →](llm_nodes.md)
+
+- **Shared LLM backend and model-aware rewriting (10-04, 0.4.77):** LLM Analyze adds PromptForge-backed H3, Wan 2.2, LTX, Krea2, Anima and Illustrious presets. Model loading, server transports and H3 prompt construction have node-independent owners shared with Director Forge. Operator-configured OpenAI-compatible/Ollama servers support workflow execution without storing endpoints or API keys in graphs; local GGUF vision messages also use shared construction. Existing node IDs, widgets, legacy presets, custom system instructions and optional text input remain compatible. Director settings, routes, reference handling and continuation behavior are unchanged. [LLM guide →](llm_nodes.md)
+
+- **H3 Forge picture labels and shot planning (10-04, 0.4.76):** PR #65 adds labelled REF2VA casts, Auto/1–5 shots with per-shot descriptions, cut-time repair, and typed REF2VA validation without false empty-field warnings. Separate legacy pictures remain separate beyond four characters and partially labelled groups keep their identity. Drafts retain shot descriptions; older drafts clear unrelated shot text. New image-only labelled REF2VA drafts send instructions rather than pixels to the writer; mixed/saved references keep the full definitions and vision path. Cut repair retains millisecond precision, quoted dialogue is accepted, and music heuristics warn without erasing requested accompaniment. Shots is correctly hidden during continuity. Presence penalty is explicitly zero for remote writers, llama-swap unload accepts plain-text success, and repetitive drafts are rejected before Apply. [Director guide →](minimax_h3_director.md#prompt-forge-optional)
+
+- **H3 Continuity consecutive-run fix (10-03, 0.4.75):** Re-running capture or continuation with a cached Director Guide now creates a fresh checkpoint ID at Append & Stage. This prevents `FileExistsError` / Windows `WinError 183` on the second run without overwriting previous checkpoints or changing the selected source ([#64](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/issues/64)).
+
+- **H3 Continuity migration and Director controls (10-03, Git fix after 0.4.74):** Older active continuations keep their saved added length when converted to Duration. Legacy next-action ideas stay in the action section of structured REF2VA prompts, without changing definitions or music; uppercase section headers are accepted too. Native Director Duration/FPS callbacks work in the current frontend, and migration/save-reload are tested in classic canvas and Nodes 2.0. Capture remains opt-in. Package version unchanged; no new Registry release. [Workflow migration →](h3_continuity.md#loading-older-workflows)
+
+- **Workflow restoration and H3 audio-lock capture (10-03, 0.4.74):** The Wildcard & Preset Prompt Builder restores saved picker selections and weights after loading workflows or images, preserving them on the next interaction ([#62](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/issues/62)). H3 Continuity accepts native latent-mask and AV split/concat nodes before the sampler, including externally encoded locked audio, while still requiring the video latent to originate from the matching Director Guide ([#58](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/issues/58)). [Audio-lock wiring →](h3_continuity.md#wiring)
+
+- **Seamless Loop documentation, 0.4.72:** Condensed usage and model guidance, retained relevant references, and corrected the documented `exact_endpoint` default to **off**. [Usage and references →](seamless_loop.md)
+
+- **H3 Forge reference intent and structured continuity, 0.4.71:** Pose/custom image roles with saved instructions and keep/ignore notes; reference metadata travels with workflows and reference-file packs. Continuity Forge can directly include timeline references, defaults to a six-section REF2VA draft when they are included, and carries existing definitions forward with safe media-link remapping. The Director's model-free Insert Prompt Structure supports the active Continuity prompt, retaining next-action text and existing definitions; Forge has no separate template/identity editor. Structured prompts retain definitions through native continuation assembly. [Director guide →](minimax_h3_director.md#prompt-forge-optional) · [Continuity guide →](h3_continuity.md#structured-ref2va-continuation-without-manual-assembly)
+
+- **Seamless Loop, 0.4.69:** New automatic `IMAGE`-batch loop node with native RIFE/FILM safetensors selection, multi-metric overlap/trim analysis, bidirectional morphing and bounded exposure matching. Optional exact endpoint copying guarantees first/last tensor equality, not artifact-free motion or lossless video encoding. [Usage and research →](seamless_loop.md)
+
+- **Attention patch retired, 0.4.68:** Patch Comfy Kitchen Attention is deprecated and removed from the nodepack, registry, and issue-form options. MiniMax H3 Cache remains supported. In older workflows, remove the retired node and reconnect its incoming `MODEL` to its downstream consumer. README layout and asset changes are retained. [Migration notes →](minimax_h3_cache.md#retired-attention-patch)
+
+- **Lable (DaSiWa), 0.4.67:** Integrated workflow annotations for classic canvas and Nodes 2.0, with font previews, RGB/HEX colors, eyedropper, embedded images, precise numeric controls, and opacity-safe native node colors. [Label guide →](lable.md)
+
+- **System Monitor Ultra compact (09-30, 0.4.66):** Optional mode switches from the default Lite top bar to a right-docked card with every enabled metric visible and no internal scrollbar. Switching back restores Lite's top row and saved width. [Monitor guide →](system_monitor.md#ultra-compact)
+
+- **System Monitor layout (09-28, 0.4.64, #59):** Lite defaults to its own top row instead of crowding ComfyUI controls; a horizontal-only resize handle wraps complete meters without cropping their values. The drag grip stays meter-height. The monitor reattaches after ComfyUI rebuilds its toolbar when the Properties panel toggles. The settings menu opens within the viewport, and background/content opacity controls are independently adjustable. The Free Memory button remains beside the top controls in every monitor placement. [Monitor guide →](system_monitor.md)
+
+- **H3 Forge subject-aware grouping (09-28, 0.4.63):** REF2VA picture rows can explicitly share a subject group; separate remains the default. Forge presents those pictures together to the prompt model and warns when distinct subject definitions cite members separately. Group choices persist with the Director workflow; no automatic inference from the Idea. [Director guide →](minimax_h3_director.md#prompt-forge-optional)
+
+- **H3 Continuity media and prompt fixes (09-27, 0.4.62):** Source probing, normalization and Forge tail images now use PyAV libraries without requiring external FFmpeg executables. Single-frame sources and trims retain a visible frame. Continuation prompts weld the overlap seam while allowing a requested change of pace, sound or camera afterward; Forge follows an existing next-action draft when no new idea is given. Director canvas dimensions are reapplied on restore and serialization, and saved continuity text is preserved. Windows AMD telemetry uses ADLX with a CIM fallback. [Continuity guide →](h3_continuity.md)
+
+- **H3 Continuity Advanced overlay (0.4.61):** The rounded Advanced button now sits between Use latest output and Clear source. It opens a separate settings overlay instead of growing the Director node. The new ∞ Save new takes button before Choose start video controls checkpoint capture; choosing a source activates continuation separately. Capture, preferred context, references, session ID and source selection stay in saved workflow state; saved checkpoints remain available after ComfyUI restarts. Unsaved workflow changes still require saving.
+
+- **H3 Forge: vision GGUF and authenticated servers (09-26, 0.4.60):** Forge now supports vision-capable GGUF models (model + mmproj projector in the same folder) for continuity tail-image drafting, and OpenAI-compatible servers that require an API key via the new **H3 Forge → OpenAI-compatible API key** setting. Embedding models are excluded from the Ollama picker.
+
+- **H3 Continuity (09-25, 0.4.59):** Integrated AV continuity with native tail conditioning and Forge drafting for continuation prompts. REF2VA audio-only validation resolved. Continuity nodes registered under the DaSiWa/MiniMax H3 category alongside the Director.
+
+- **System Monitor: persistent NVML session (09-25, #54):** NVIDIA GPU polling now uses one persistent NVML session instead of spawning a new process per poll, reducing overhead and eliminating intermittent probe failures.
+
+- **H3 Forge: Transformers GQA compatibility (09-25, #55):** Fixed compatibility with newer Transformers versions that changed the GQA helper signature, restoring Forge operation on recent ComfyUI builds.
+
+- **Prompt Forge guide:** The [Director guide](minimax_h3_director.md#prompt-forge-writing-and-applying-a-draft) now walks through idea, model, creativity and detail choices, reference roles, draft review, applying, cancellation, and saved-history behavior. The README lists Prompt Forge as a separate major Director feature.
+
+- **H3 Forge saved drafts (09-24, 0.4.57):** Each Director keeps its last three successful Forge generations in its saved workflow. Reopen Forge to preview and apply one; **Clear history** removes drafts only, while the Director's **Clear** also clears its Forge history. [Director guide →](minimax_h3_director.md)
+
+- **H3 Prompt Forge and single prompt editor (09-24, 0.4.56):** PR #51 adds on-demand prompt writing with a local ComfyUI LLM, Ollama, or a configured OpenAI-compatible server. Director prompts start empty in one editor; Insert Prompt Structure restores the former section template on demand. Prompt helpers and Prompt Forge share a dark rounded toolbar. Old structured workflows, embedded prompts, and reference packs migrate into the single field. [Director guide →](minimax_h3_director.md)
+
+- **Unreleased — Registry automation:** The failing scheduled Registry-status workflow is removed. On a future `pyproject.toml` version bump, the publish workflow will retain the newly active release, deprecate its four immediate predecessors, and unpublish older versions. No Registry versions are changed by the workflow edit itself.
+
+- **Free Memory toolbar control (09-23, 0.4.55):** A separate DaSiWa-logo button beside the top-docked monitor offers **Free VRAM** (unload ComfyUI-managed models) and **Free System RAM** (unload models and reset the execution cache). It stays available when monitoring is off, has its own DaSiWa setting, and closes its menu on outside clicks. The monitor chips, settings button, and memory button now align at 36px height. [Usage and limits →](system_monitor.md#free-memory-toolbar-button)
+- **Director prompt count and monitor overlays (09-22, 0.4.53–0.4.54):** The prompt character counter now counts the assembled prompt, including structured headers. Full monitor mode and its settings menu render above toolbar content instead of being clipped; the Full view retains meter colors and fill bars.
+
+- **MiniMax H3 Director: RefMod lane & prompt-mode fixes (09-22):** Fixed stale/duplicate RefMod numbering on fresh ComfyUI load (falls back to saved `media_type` when library data isn't loaded yet). Remove button in REFMOD overlay now updates the timeline immediately. Clear button disables all refmods in the overlay and removes them from lanes. Mode-aware lane visibility: T2VA hides the reference grid entirely, non-reference modes show a single Image row only (no clutter). Track height adapts to fit shown lanes instead of fixed 280px minimum. Simple/Structured prompt mode switching now preserves content bidirectionally — switching Structured → Simple flattens fields, Simple → Structured parses them back; unlabeled text dumps into detailed_description. Added right-aligned character counter to all prompt builder forms (Base, Simple, REF2VA) that updates live as you type. Refmod X button in slotline now disables the refmod in the overlay instead of trying to remove it from items. Strength changes reflect immediately in the timeline without requiring a lane re-click. Version bump to 0.4.52.
+
+- **System Monitor: global DaSiWa settings switch (09-21):** **Settings → Other → DaSiWa → System Monitor** now controls the monitor completely. Off removes its toolbar/floating UI, dock targets, frontend listeners, and backend telemetry polling; on mounts and starts them again. Version bump to 0.4.51.
+
+- **Settings About: installed nodepack version (09-21):** ComfyUI → Settings → About now shows a linked `DaSiWa Custom Nodes v…` badge, using the packaged release version. Version bump to 0.4.50.
+
+- **Recent stability fixes (09-19, 0.4.48–0.4.49):** RefMod image dimensions are read correctly from 5D latents; Enhanced Video Combine no longer exposes videos as image assets; stale drive mountpoints no longer break monitor polling. The experimental MiniMax H3 Latent Upscaler was removed after output-quality issues—it is not a shipped node.
 
 - **MiniMax H3 Director: upstream RefMod v5 bundles (09-19):** REF2VA now loads current standalone and bundled RefMods created by ComfyUI-MiniMaxH3Mod. Bundle members are expanded into their image, video, and audio references; one `<RefMod N>` alias resolves to every contained native label in member order. Version bump to 0.4.47.
 
@@ -43,6 +195,56 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.32 | 10-19 | New **Tiled Diffusion (Image)** MODEL patch: per-step overlapping-tile sampling for SD/SDXL/Flux-family image models |
+| 0.5.31 | 10-18 | `POST /dasiwa/wildcard-preset-prompt-builder/build`: resolved wildcard prompts for apps outside the graph; Metadata Image Saver model hash cache survives restarts |
+| 0.5.30 | 10-18 | `POST /dasiwa/llm/write`: Prompt Writer dialects on the Forge backends for apps outside the graph |
+| 0.5.29 | 10-17 | Metadata Image Saver: `Lora hashes` for Civitai resource linking; detected Steps/CFG/Seed no longer overwritten by `0` defaults |
+| 0.5.28 | 10-16 | Exact H3 segment boundaries through Opus export; native 48-kHz Opus input and strict Publish checks |
+| 0.5.27 | 10-16 | Continuity validates compiled subgraphs and bypasses; clearer Advanced output hints |
+| 0.5.26 | 10-16 | Join Clips: opt-in lossless video copy with automatic re-encode fallback |
+| 0.5.25 | 10-16 | Enhanced Video Combine: RGBA alpha in Animated WebP and VP9 WebM/MKV; WebP loops forever and honours `quality` |
+| 0.5.24 | 10-16 | Segment Prepare/Decode run both output modes; segment exports allow spatial post-processing |
+| 0.5.23 | 10-16 | H3 transition bridges in Join Clips; labelled overlay fields, durations, Remove; PyAV 19 H.264 metadata fix |
+| 0.5.22 | 10-15 | Gitea testing: opt-in H3 delta segments, bounded decode and model-free Join Clips; AI transition repair gated |
+| 0.5.21 | 10-15 | RefMod export fix: read-write fsync descriptor so bundle saving works on Windows |
+| 0.5.20 | 10-15 | Director RefMod creation and editing: automatic saved-member loading, editable descriptions, media-line reset and no-overwrite Save Changes copies |
+| 0.5.18 | 10-14 | GitHub/Gitea update: Forge history reapply, Cast/People safety fixes, sharp LoRA DOM controls and preview seeking/fullscreen |
+| 0.5.17 | 10-14 | Gitea testing: Forge People boxes, editable Cast/scene cards, automatic reading with opt-out, Idea priority and safe queued/stale reads |
+| 0.5.16 | 10-13 | H3 Memory Planning toggle and configurable reserve slider (0–100%, default 5%); legacy MB caps retained |
+| 0.5.15 | 10-13 | H3 Enhanced Upscale support for the Director Image Inpaint five-frame pass, including optional native refinement |
+| 0.5.14 | 10-12 | H3 Forge continuation idea priority, identity-only structured history, text-only fallback context and advisory repeated-action warning |
+| 0.5.13 | 10-12 | Seamless Loop opt-in RTX transition interpolation, quality and CUDA device selection; native RIFE/FILM default retained |
+| 0.5.12 | 10-12 | Director audio/video waveform, crop and playback cursor; seek readiness/Blob fallback; bounded Video Combine staging and opt-in RAM reclamation |
+| 0.5.11 | 10-11 | YuE2 Song Style, Lyrics and Instrumental Style Prompt Writer/Advanced Analyze presets |
+| 0.5.10 | 10-11 | Git update: H3 optional budget enforcement, 25% workspace headroom, native single-tile sampling and preserved legacy widget/callable positions (#76) |
+| 0.5.9 | 10-11 | Consolidated public release: RTX Frame Generation (HIGH default), SDK-aware RTX 10-bit/TrueHDR enhancement, RAM-pressure cleanup, Free Both, H3 opt-in Spike Guard, complete hover help and updated node screenshots |
+| 0.5.8 | 10-09 | H3 tile-local refinement, automatic tile layout and Continuity planning reserve; video RefMod Qwen sampling and timestamps |
+| 0.5.7 | 10-09 | Automatic saved LLM server settings; combined local/remote choices and complete nested local discovery |
+| 0.5.3 | 10-07 | Joint target-grid tile/chunk selection, edge-overlap cost and per-tile keyframe budget |
+| 0.5.2 | 10-06 | H3 independent spatial/temporal switches, dynamic-memory budget and minimum tile floor |
+| 0.5.1 | 10-06 | LLM Prompt Writer display-name rename; saved node IDs unchanged |
+| 0.5.0 | 10-06 | MiniMaxH3 Enhanced Upscale: learned/interpolation upscale, tiled refinement, Director/Continuity integration, opt-in soft mask, CLI plan and usage diagrams |
+| 0.4.83 | 10-06 | Consistent MiniMaxH3 display names; README upscale, Director and checkpoint/video Continuity diagrams and usage hints |
+| 0.4.76 | 10-04 | H3 Forge picture labels, per-shot descriptions and typed REF2VA validation; reviewed compatibility and prompt-repair fixes (#65) |
+| 0.4.75 | 10-03 | Fix H3 Continuity checkpoint collisions on consecutive runs with cached Guide outputs (#64) |
+| 0.4.74 | 10-03 | Restore wildcard picker selections after workflow/image loading (#62); allow native audio-lock latent paths with H3 Continuity capture (#58) |
+| 0.4.66 | 09-30 | System Monitor optional Ultra compact mode, right-docked when selected, all enabled metrics visible |
+| 0.4.64 | 09-28 | System Monitor independent default row, remount on Properties toggle, horizontal wrapping resize, viewport-aware menu and opacity controls (#59) |
+| 0.4.63 | 09-28 | H3 Forge explicit subject-aware picture groups and split-definition warning |
+| 0.4.62 | 09-27 | H3 Continuity PyAV media path and single-frame fixes; seam-aware prompts, canvas/serialization fixes; Windows AMD ADLX telemetry |
+| 0.4.61 | 09-26 | H3 Continuity Advanced overlay; ∞ Save new takes button; workflow-persisted session state |
+| 0.4.60 | 09-26 | H3 Forge: vision GGUF support and authenticated OpenAI-compatible servers |
+| 0.4.59 | 09-25 | H3 Continuity: AV tail conditioning, Forge drafting for continuations, REF2VA audio-only validation fix |
+| 0.4.58 | 09-25 | System Monitor: persistent NVML session (#54); H3 Forge Transformers GQA signature fix (#55) |
+| 0.4.57 | 09-24 | Forge saves three drafts per Director; Forge history and Director Clear controls |
+| 0.4.56 | 09-24 | H3 Prompt Forge and single free-text Director prompt with optional structure insertion and legacy migration |
+| 0.4.55 | 09-23 | Independent Free Memory toolbar button; VRAM/model unload and RAM/cache reset actions |
+| 0.4.54 | 09-22 | Director prompt counter includes assembled structured headers |
+| 0.4.53 | 09-22 | Monitor Full overlay and settings-menu clipping, colors, and fill bars fixed |
+| 0.4.52 | 09-22 | MiniMax H3 Director: RefMod lane fixes, prompt-mode content preservation, char counter, immediate overlay sync |
+| 0.4.51 | 09-21 | System Monitor: global DaSiWa settings switch that fully mounts/stops telemetry |
+| 0.4.50 | 09-21 | Settings About: visible installed DaSiWa Custom Nodes version badge |
+| 0.4.49 | 09-19 | Experimental H3 Latent Upscaler (subsequently removed before 0.4.50 due to output-quality issues) |
 | 0.4.47 | 09-19 | MiniMax H3 Director: upstream RefMod v5 bundle loading |
 | 0.4.45 | 09-19 | Enhanced Video Combine: `%seed%` filename token via an optional seed input |
 | 0.4.43 | 09-18 | MiniMax H3 Director: RefMod timeline visualization, missing-file resilience, upstream credit to ComfyUI-MiniMaxH3Mod |
@@ -82,6 +284,39 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### MiniMax H3 Director (v1)
 
+- **10-14 (0.5.18):** Includes mode-gated Forge media, Who selections up to 32, Pose takers, first/last FL2VA slots, editable People boxes and Cast/scene cards from PR #78–#80. Preserves explicit Idea/Shot priority, edited cards and current reference grounding; stale automatic cards are excluded until reread. Find people and drafting are serialized, stale/renumbered read replies are rejected, and warm cleanup survives preparation errors. Explicit saved-history selection may replace prompt text without replacing the source or reference context; changes after selection still block Apply. Automatic Cast reading defaults on with a saved opt-out; draft picture vision remains independent and defaults off.
+
+- **Git fix after 0.5.16:** Manual prompt edits immediately update the new-clip and continuation stores, preventing a source/No source switch from restoring an older Forge draft. Empty prompts and whitespace are preserved. Explicit Forge Apply and programmatic Continuity templates retain their context-specific behavior. Added source round-trip regression tests.
+
+- **10-12 (0.5.14):** Forge places a nonblank next-action idea after reference/context instructions and removes old story/draft actions from that request. Structured history retains subject definitions; plain history is omitted with source-tail evidence and restored as historical context for text-only fallback, with a fresh context-budget check. Action-only similarity warns without blocking Apply or regenerating; empty-idea behavior and reference/workflow settings are unchanged. Mocked-backend tests cover idea precedence, structured/plain history, repeated actions and rejected-image fallback.
+
+- **10-12 (0.5.12):** Audio previews show full-source channel amplitude peaks; audio/video previews share highlighted crop, independent draggable/keyboard playback cursor and source-time readout. Crop playback waits for readiness and seeking, falls back to a local Blob for non-seekable HTTP media, and stops at the selected end even after queued native pause events. Closing stops playback and releases preview resources; failed waveform decoding leaves playback/cropping available.
+
+- **10-09 (0.5.8):** Video RefMods are presented to Qwen at the native 2 fps rate with matching half-second timestamps; the full video latent remains available to DiT. Image RefMods keep their existing presentation.
+
+- **10-03 (0.4.75, #64):** Append & Stage allocates a fresh checkpoint ID per executed commit instead of reusing an ID from cached Director Guide outputs. Consecutive new takes and continuation rerolls keep separate immutable checkpoints, preserve the pinned parent and leave capture-off behavior unchanged. Added CPU regression coverage for reused contexts, legacy run IDs, publish/readback and existing checkpoint preservation.
+
+- **10-03 (Git fix after 0.4.74):** Legacy Continuity settings migrate once: active saved +frames become Duration (`frames / 24`), inactive sources do not activate, and capture preferences survive. Structured REF2VA ideas are inserted into `detailed_description` rather than the final music field; section parsing accepts uppercase headers and existing soundscape/music aliases. Director widget wrappers preserve the native callback receiver and arguments for mode, external prompt, Duration and FPS. Added boundary/short-source timing parity, graph provenance and real browser save/reload coverage. Append-before-spatial-upscale ordering is checked with synthetic CPU latents; real H3 generation and neural-upscaler seam quality remain unverified. No runtime dependency or version change. [Migration and maintainer checks →](h3_continuity.md#loading-older-workflows)
+
+- **10-03 (0.4.74, #58):** Continuity capture traces video-latent provenance through native Set Latent Noise Mask, Separate AV Latent and Concat AV Latent nodes. External masked audio no longer triggers the direct Guide-to-sampler wiring error; wrong Guides, audio-only dependencies and cyclic paths remain rejected. [Wiring and overlap limits →](h3_continuity.md#wiring)
+
+- **09-28 (0.4.63):** **H3 Forge subject-aware grouping:** REF2VA can group subject pictures explicitly in the Forge reference rows; default Separate leaves pictures independent. The grouping is stored with the workflow and groups are shown before generation. A Python check warns when the model explicitly splits one group across separate `<Subject N>` definitions, without claiming to judge unlabeled prose or image identity. [Forge guide →](minimax_h3_director.md#prompt-forge-optional)
+
+- **09-27 (0.4.62):** **Continuity media and seam policy:** Uploaded-source probing, 24 fps normalization, and Forge tail extraction use PyAV rather than external FFmpeg commands. Single-frame source videos and trimmed one-frame ranges are retained. The automatic prompt matches motion, camera and sound at the overlap seam but permits an explicit next action after it; Forge keeps the current next-action draft when the new idea is empty. Director resolution is reapplied on restore and serialization; saved continuity text remains unchanged by normalization. [Media migration and limits →](h3_pyav_migration.md)
+
+- **09-26 (0.4.61):** **H3 Continuity Advanced overlay:** The rounded Advanced button now sits between Use latest output and Clear source, opening a separate settings overlay instead of growing the Director node. New ∞ Save new takes button before Choose start video controls checkpoint capture independently from continuation activation. Capture state, preferred context, references, session ID, and source selection persist in saved workflow state; checkpoints remain available after ComfyUI restarts.
+
+- **09-26 (0.4.60):** **H3 Forge vision GGUF and authenticated servers:** Vision-capable GGUF models (model + mmproj projector in the same folder) are now detected and paired automatically for continuity tail-image drafting; Forge lists them as "sees pictures". OpenAI-compatible servers that require an API key are supported via the new **Settings → DaSiWa → H3 Forge → OpenAI-compatible API key** setting (sent as Bearer token to that address only). Embedding models are filtered out of the Ollama picker.
+
+- **09-25 (0.4.59):** **H3 Continuity:** Integrated AV continuity with native tail conditioning for both completed H3 checkpoints and ordinary uploaded videos. Forge drafting automatically receives continuity context (source-tail evidence, next action, added duration). REF2VA audio-only validation resolved. Continuity companion nodes (Append & Stage, Publish Export) registered under DaSiWa/MiniMax H3 category.
+
+- **09-25 (0.4.58):** **Transformers GQA helper signature fix (#55):** Fixed compatibility with newer Transformers versions that changed the GQA helper signature, restoring Forge operation on recent ComfyUI builds.
+
+- **09-22 (0.4.54):** The character counter measures the final assembled prompt, including structured field headers, rather than only raw textarea text.
+
+- **09-22:** **RefMod lane & prompt-mode fixes (0.4.52):** Fixed stale/duplicate RefMod numbering on fresh ComfyUI load — falls back to the refmod's saved `media_type` when library data isn't loaded yet, so tags are unique until REFMOD panel opens. Remove button in REFMOD overlay now calls `render()` after removal so the timeline updates immediately instead of requiring a lane re-click. Clear button (modebar) now disables all refmods in the overlay (`enabled = false`) and removes them from lanes. Mode-aware lane visibility: T2VA hides the reference grid entirely, non-reference modes (I2VA, L2VA, FL2VA, Image Inpaint) show a single-row Image lane only — no clutter from unused Video/Audio rows. Track height adapts to fit shown lanes (min-height 0 instead of fixed 280px). Simple/Structured prompt mode switching preserves content bidirectionally: Structured → Simple flattens fields into `field: value` lines; Simple → Structured parses those labels back into separate fields, and if no recognized labels are found the full text dumps into `detailed_description` (REF2VA) or `integrated_multimodal_description` (other modes). Added right-aligned character counter to all prompt builder forms (Base, Simple, REF2VA) that sums characters across all textareas and updates live on every keystroke. Refmod X button in the slotline now sets the refmod's `enabled = false` in the overlay (matching overlay behavior) instead of calling `remove()` which only works on regular media items. Strength changes in the REFMOD overlay reflect immediately in the timeline clip without requiring a lane re-click.
+
+- **09-19:** RefMod image latent width and height now use the correct dimensions of 5D tensors.
 - **09-19:** **Upstream RefMod v5 bundles (0.4.47):** The REF2VA overlay recognizes RefMod containers from ComfyUI-MiniMaxH3Mod as well as standalone image/video/audio files. It expands each `ref_N` member into its native reference; `<RefMod N>` resolves to all labels from that selected bundle in member order.
 
 - **09-18:** **RefMod timeline visualization + upstream credit (0.4.43):** Enabled RefMods now render as read-only clips in their appropriate reference lane with a green REFMOD badge, slot number, and strength indicator — total reference count visible at a glance alongside uploaded media. Missing RefMod files warn-and-skip instead of hard-erroring, so stale workflow saves don't crash generation. **Upstream credit:** the saved person RefMod concept, `.safetensors` latent file format, and strength scaling design are based on [Luisacaotica/ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod); both packs can be installed side-by-side and share the same `models/refmods/` folder.
@@ -103,16 +338,36 @@ Quick reference for the version bumps inside this window, newest first:
 - **08-03:** initial integration of the timeline-based H3 Director and Guide nodes.
 - **Earlier additions (pre-window):** embedded video audio extraction (a video can supply its own audio reference; V / A / V+A stream switch per video clip), standalone-audio trim support with waveform preview + draggable crop markers, attached soundtracks that share a video's trim window, FL2VA ↔ REF2VA mode-switch safety (incompatible references are preserved, not deleted), and hardened video duration detection with a container-level fallback.
 
+### MiniMaxH3 Enhanced Upscale
+
+- **10-11, 0.5.10:** Adapt #76 with default-on `enforce_memory_budget` appended after existing controls. Retain RAM/guard checks and independent split settings; reduce diffusion workspace headroom from 35% to 25%. Omit the tiled wrapper for a single full-canvas plan. Legacy positional restore and save/reload verified in the frontend; 302 focused tests pass, including native CPU H3 sampling. Large pretrained GPU render quality and OOM margins remain unverified.
+
 ### MiniMax H3 Cache & Patch Comfy Kitchen Attention
+
+Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below describe historical releases.
 
 - **08-29:** **PDD compatibility:** the node detects the live `FinalLayer.forward` signature at patch time and passes the ComfyUI 0.34+ PDD sigma-schedule arguments, so the PDD LoRA head bank works with cache enabled. **Per-token masks:** honors `denoise_mask` / `audio_denoise_mask` exactly like Core — mixed masks run masked rows at their own strength via per-row `rows_to_mod_index` modulation; absent or uniform masks collapse to the scalar path, byte-identical to the previous behaviour. **Spectrum patch artifact:** `patches/comfyui-spectrum-minimax-h3-pdd.patch` for xmarre's ComfyUI-Spectrum-MiniMax-H3 v0.2.20, which silently degrades on the PDD signature.
 - **08-16:** both nodes added: an approximate, model-scoped whole-block-stack residual cache (relative-L1 threshold sampling, 15–90% sampling window, bounded cache hits, auto/CUDA/CPU storage) and a one-input INT8-attention model patch; both are model-clone patches and chain in either order.
+
+### H3 Prompt Forge
+
+- **10-04 (0.4.76, #65):** Added picture-label casts, Auto/1–5 shots and saved per-shot descriptions. Typed REF2VA prompts are validated from their actual text. Review fixes preserve separate legacy subjects and partially labelled groups, retain full definitions for mixed/saved references, repair cuts at millisecond precision, accept quoted dialogue, and warn about uncertain music intent without deleting it. Shot fields survive draft reload without leaking between same-ID nodes; continuity hides the control. Regression coverage includes backend/helper tests, Chromium DOM history/visibility checks and isolated ComfyUI registration/routes/assets.
+
+- **09-26 (0.4.60):** Vision-capable GGUF models (model + mmproj projector in the same folder) are detected and paired automatically for continuity tail-image drafting; Forge lists them as "sees pictures". OpenAI-compatible servers that require an API key are supported via the new **Settings → DaSiWa → H3 Forge → OpenAI-compatible API key** setting (sent as Bearer token to that address only). Embedding models are filtered out of the Ollama picker.
+- **09-25 (0.4.58):** Fixed compatibility with newer Transformers versions that changed the GQA helper signature (#55), restoring Forge operation on recent ComfyUI builds.
+- **09-25 (0.4.59):** Continuity drafting: when Continuity Active, Forge automatically receives source-tail evidence, next action, and snapped added Duration. Tail images are prepared only when a vision model needs them and are not displayed as tiles. Apply to node updates only the continuation prompt without queueing a video.
+- **09-24 (0.4.57):** Each Director keeps its last three successful Forge generations in its saved workflow. Reopen Forge to preview and apply one; Clear history removes drafts only, while the Director's Clear also clears its Forge history.
+- **09-24 (0.4.56):** On-demand prompt writing with a local ComfyUI LLM, Ollama, or a configured OpenAI-compatible server. Three model sources: ComfyUI `models/llm` folder (Transformers or GGUF), Ollama API at loopback, and any OpenAI-compatible `/v1/models` + `/v1/chat/completions` endpoint. Drafts are written before the H3 video queue and applied manually; Forge refuses a new generation while a workflow is sampling so it does not evict the video model.
 
 ### Seed Control
 
 - **08-26:** new standalone Seed Control node extracted from the Director seed panel: full 64-bit unsigned seeds, Random|Fixed segmented switch, spinner with hold-to-repeat, Last 10 seeds history, external override socket, and INT + NOISE outputs; lossless 64-bit display via decimal-string mirroring; mode, last seed, and history persist with the workflow.
 
 ### Advanced LoRA Loader (formerly LTX-2.3)
+
+- **10-14 (0.5.18):** Native DOM text and controls replace the rasterized stack surface for sharp canvas zoom. Info/clear buttons gain bounded hit areas and hover feedback; clear retains strengths and does not delete files. Existing themes, serialized stack settings and model application remain unchanged. Browser checks cover zoom and device-pixel ratios 1/1.25/2, pointer actions, value editing, resize and removal/re-add.
+
+- **Git fix after 0.5.16:** Reuses the stack painter and pointer controls in a DOM canvas for classic and Nodes 2.0. Inline value editors follow the mounted surface; resize, removal/re-add and asynchronous key-count updates repaint it. Existing stack, model type and cache input slots remain canonical on workflow reload. Includes an isolated browser regression script; LoRA application is unchanged.
 
 - **09-08:** **Civitai mirror links + (i) panel rework (0.4.35):** the (i) panel now always shows **both** Civitai mirror links — the `.com` link labeled `BLUE:` (blue) and the `.red` link labeled `RED:` (red); the labels are plain text, only the URL is clickable. Backend (`nodes/lora_info.py`): the by-hash lookup runs on `.com` first and **falls back to the `.red` mirror** on a 404 (verified byte-identical mirror, same `modelId`/`versionId`), and results are memoized **including misses** — a negative lookup no longer re-hits the Civitai API on every panel open (the stored error text is preserved in the cache entry; the panel's **Refresh** button forces a re-lookup via `refresh=true`). Panel layout: the file name moved to its own full-width row above the controls (long folder paths wrap independently and can no longer stretch the button row), and the sha256 hint sits on its own row directly under the name (9 px, `user-select:all`). The earlier `.com`/`.red` domain selector buttons and the `civitai_domain` localStorage/property machinery were removed with the rework — both links are always shown.
 - **08-29:** **Trash button (0.4.29):** each slot row gained a trash button (plain canvas paths, ASCII-drawn trash-can, no emoji) placed directly right of the info button. Clicking it resets that slot's LoRA back to "None" (the STR / VIS / A multipliers are kept — exactly like picking "None" in the slot picker), so a LoRA can be unstacked without reopening the picker. The info button shifted slightly left (x 976 → 962) to make room; the trash button occupies the previous info x. UI-only, no backend change.
@@ -125,13 +380,21 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### RTX Upscaler & Refiner
 
-- **08-23:** output batch now allocated lazily (kernel-decided, no up-front memory pressure); `use_mmap` **off by default**.
+- **08-23:** output batch switched to `torch.empty` (no zero-fill); `use_mmap` **off by default**. Clarification: CUDA still reserves full storage immediately; CPU lazy page commitment does not protect a fully written oversized batch. Current RTX allocation capacity-checks RAM and budgets GPU working memory.
 - **08-17:** **`use_mmap` disk-backed fallback** as a permission switch (VRAM → RAM → disk chain) plus default-on `auto_unload_models`.
 - **08-14:** `empty_cache` made optional to restore API workflow compatibility (fixes #24, PR #26).
 - **08-06:** VRAM-aware output allocation; optional `empty_cache` switch; fixed `use_mmap` swap bloat.
 - **08-01:** adaptive CPU RAM reserve shared with the Watermark compositor.
 
 ### Enhanced Video Combine
+
+- **10-14 (0.5.18):** Includes fullscreen playback and dependable preview seeking from the post-0.5.16 Git update. The player retains the browser-compatible preview and original download paths; encoding settings are unchanged.
+
+- **Git fix after 0.5.16:** Adds a Help button beside preview controls so the existing in-app guide is accessible in Nodes 2.0 as well as classic canvas. Classic title-bar help remains available.
+
+- **10-12 (0.5.12):** Encoding streams original/pingpong frames without an extended batch allocation. Bit-depth detection bounds its sample before CPU/float32 conversion, including non-contiguous input. `pass_frames=false` returns an empty tensor with no source storage. Adds optional default-off `free_memory_if_needed`: inactive caches, releasable pins, then active caches under pressure, with actual RAM rechecks and five-second wall-clock throttling. Live inputs and requested full-frame outputs still require memory; no global GPU-model offload. CPU/CUDA storage tests, native-cache eviction and a real PyAV encode are covered.
+
+- **09-19:** Video outputs are no longer advertised as `ui["images"]` assets; image-only consumers no longer receive video entries.
 
 - **09-19:** **`%seed%` output naming (0.4.45):** An optional `seed` input expands `%seed%` in `filename_prefix`, including the corresponding first/last-frame export names. Unconnected inputs preserve the literal token for existing workflows.
 - **09-15:** **PyAV-native encoding and seekable previews (0.4.40):** all video/audio encoding, metadata, animated WebP/AVIF, and compatibility preview transcoding moved from external FFmpeg processes to PyAV 18. Hardware encoder candidates are runtime-tested and fall back through NVENC → QSV → AMF → VAAPI → software. Outputs receive explicit one-second keyframes; MP4 uses fast-start metadata. AV1, VP9, HEVC, 10-bit, and other compatibility previews are cached as H.264/AAC MP4 and served with byte-range support for reliable browser scrubbing, while downloads remain the untouched original codec/container.
@@ -145,16 +408,32 @@ Quick reference for the version bumps inside this window, newest first:
 
 ### Wildcard & Preset Prompt Builder
 
+- **Git fix after 0.5.16:** Keeps the category/preview panel height bounded in Nodes 2.0 and focuses the panel when clicking its non-interactive area, allowing native widget wheel capture to scroll its contents without changing canvas zoom. Native controls retain focus.
+
+- **10-03 (0.4.74, #62):** Reload saved selections and weights after node/graph configuration, including workflow and generated-image loading. The picker reflects serialized state and retains restored entries on the next interaction, including when the library loads before or after restoration.
+
 - **08-17:** library additions: Background, Intimate Backgrounds, Weapons & Items; duplicate entries merged.
 - **07-31:** segment picker interface; picker layout restored after workflow reload.
 - **07-30:** node added: dual Booru / Natural-Language wildcard library, weighted bounded prompts, reproducible rerolls.
 
 ### LLM / VLM Analyze
 
+- **Git fix after 0.5.16:** Prompt Writer marks its native text fields for scoped Nodes 2.0 layout: start_with stays compact and idea receives extra node height. Classic sizing callbacks and serialized inputs are retained.
+
+- **10-09 (0.5.7):** Prompt Writer and Advanced nodes share saved single-user DaSiWa LLM server settings automatically; `DASIWA_LLM_ALLOW_SETTINGS` is no longer required. Local and configured server models remain listed together, including all sibling model folders and GGUFs below a common local directory. Environment priority, credential-source pairing and multi-user isolation are preserved.
+
 - **09-15: Registry security remediation (0.4.38–0.4.39):** removed workflow-controlled Hugging Face repository downloads, Hugging Face token reads, and `trust_remote_code`; local model folders must be installed before a workflow runs. Ollama requests are fixed to `http://127.0.0.1:11434/api/chat`; the former arbitrary URL input is removed. Enhanced Video Combine preview accepts only a real file under ComfyUI's output directory, rather than selecting a root from a request parameter. `tools/audit_comfy_registry_status.py` redacts Registry status payloads and verifies the exact post-publication version becomes active.
 - **07-30:** LLM cache and GGUF backends added (local GGUF via llama.cpp alongside Ollama and Hugging Face download).
 
 ### DaSiWa System Monitor
+
+- **09-27 (0.4.62):** Windows AMD GPUs use a persistent ADLX telemetry session for utilization, device-wide VRAM and temperature; CIM remains the device-enumeration fallback when ADLX is unavailable. The `amd-adlx` dependency is Windows-only. [GPU support →](system_monitor.md#gpu-support)
+
+- **09-25 (0.4.58):** NVIDIA GPU polling now uses one persistent NVML session instead of spawning a new process per poll, reducing overhead and eliminating intermittent probe failures (#54).
+
+- **09-23 (0.4.55):** Separate Free Memory toolbar button with a DaSiWa logo, independent visibility setting, and VRAM versus system-RAM/cache actions via ComfyUI's `/free` route. The controls and meter chips align at 36px height; both menus close on outside clicks. [Details →](system_monitor.md#free-memory-toolbar-button)
+- **09-22 (0.4.53):** Full panel and settings menu escape toolbar clipping; Full mode restores its meter colors and proportional fill bars.
+- **09-19:** Disk polling skips stale mountpoints that raise `OSError`.
 
 - **09-04:** stable chip width — values render in a fixed-width monospace cell (percent/°C pad to 3 digits, disk throughput to one decimal), so the chip width no longer shifts as digits tick; values ≥ 1000 MB/s switch to `x.x GB/s` so fast (M2-class) disks don't overflow the chip (issue #36).
 - **08-28:** Windows CIM probe now cached — no more per-second PowerShell spawns.

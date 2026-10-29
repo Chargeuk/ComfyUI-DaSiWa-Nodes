@@ -60,6 +60,18 @@ With the Lora Loader, you can now:
 
 ## UI Controls
 
+The stack editor works in both the classic canvas renderer and **Nodes 2.0**.
+It uses ComfyUI's DOM-widget layer while retaining the existing themes, slot
+controls and serialized `stack_data`, `model_type` and `use_cache` inputs.
+Existing workflows do not need conversion. The LoRA application backend is unchanged.
+Text and numeric controls remain sharp when zooming the canvas; info and clear
+buttons have bounded hit areas and visible hover feedback. Clear resets the slot
+to None without deleting the model file or changing its strength multipliers.
+
+For an isolated frontend regression check (no model loading or queue execution):
+`uv run --no-project --with playwright python tools/verify_advanced_lora_frontend.py --url http://127.0.0.1:8199`.
+The test expects a separate ComfyUI instance serving this checkout and clears its browser graph.
+
 ### Rows (LoRA slots)
 
 Each row represents one LoRA slot. Columns are:
@@ -117,22 +129,34 @@ Every slot row shows a small ASCII-drawn trash button directly to the right of t
 ## Example Workflows
 
 ### Scenario 1: Single voice LoRA with full control
-```
+```text
 STR: 1.0, V×: 1.0, A×: 1.0    (Normal, both video and audio)
 STR: 1.0, V×: 0.0, A×: 1.0    (Audio only)
 STR: 1.0, V×: 1.0, A×: 0.0    (Video only)
 ```
 
 ### Scenario 2: Stacking two character LoRAs
-```
+```text
 Slot 1: Celebrity A    STR: 1.0, V×: 1.0, A×: 0.0  (their face)
 Slot 2: Celebrity B    STR: 1.0, V×: 0.0, A×: 1.0  (their voice)
 Result: A's face + B's voice
 ```
 
 ### Scenario 3: Blending with negative strength
-```
+```text
 STR: −0.5, V×: 1.0, A×: 0.0   (Reduce specific video features)
+```
+
+### Typical wiring in a workflow
+
+```mermaid
+flowchart LR
+    CL[Checkpoint Loader] -->|MODEL| ALR[Advanced LoRA Loader<br>Slot 1: face V×1.0 A×0.0<br>Slot 2: voice V×0.0 A×1.0]
+    CL -->|CLIP| CTE[CLIP Text Encode]
+    ALR -->|MODEL patched| KS[KSampler]
+    CTE -->|CONDITIONING| KS
+    KS -->|latent| VD[VAE Decode]
+    VD -->|IMAGE batch| out((output))
 ```
 
 ---

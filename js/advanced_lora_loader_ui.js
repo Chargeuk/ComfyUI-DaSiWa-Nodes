@@ -121,6 +121,15 @@ function _viewState() {
 
 function positionValueEditor(overlay) {
   const { node, anchor, clientX, clientY } = overlay._editorOpts;
+  const surface = node?._loraSurface;
+  if (surface?.isConnected) {
+    const rect = surface.getBoundingClientRect();
+    const scale = rect.width / node.size[0];
+    overlay.style.left = (rect.left + scale * (anchor[0] + overlay._editorGap)) + "px";
+    overlay.style.top = (rect.top + scale * anchor[1]) + "px";
+    overlay.style.transform = `scale(${scale})`;
+    return;
+  }
   const v = _viewState();
   if (!node?.pos || !v) {
     // View state unavailable: static placement at the original click.
@@ -453,55 +462,120 @@ function setCanvasTooltip(text) {
   if (canvas && canvas.title !== text) canvas.title = text || "";
 }
 
-function drawWoodRow(ctx, x, y, w, h, seed) {
-  ctx.fillStyle = seed % 2 === 0 ? "#2c1f0e" : "#321f0a";
-  ctx.fillRect(x, y, w, h);
-  ctx.save();
-  ctx.globalAlpha = 0.07;
-  for (let i = 0; i < 12; i++) {
-    const lx = x + ((seed * 37 + i * 61) % w);
-    const curve = ((seed * 13 + i * 7) % 6) - 3;
-    ctx.strokeStyle = i % 3 === 0 ? "#ffcc66" : "#8B5E20";
-    ctx.lineWidth = i % 4 === 0 ? 1.5 : 0.5;
-    ctx.beginPath();
-    ctx.moveTo(lx, y);
-    ctx.bezierCurveTo(lx + curve, y + h * 0.3, lx - curve, y + h * 0.7, lx + curve * 0.5, y + h);
-    ctx.stroke();
-  }
-  ctx.restore();
+function loraActionAt(node, [x, y]) {
+  if (node.flags.collapsed) return null;
+  const row = Math.floor((y - 59) / 28);
+  const data = JSON.parse(node.properties.stack_data);
+  if (!data[row] || y < 61 + row * 28 || y > 85 + row * 28) return null;
+  const s = node.size[0] / 1000;
+  if (x > 934 * s && x < 960 * s) return { row, action: "info", enabled: data[row].lora !== "None" };
+  if (x > 966 * s && x < 992 * s) return { row, action: "trash", enabled: data[row].lora !== "None" };
+  return null;
 }
 
-function drawPill(ctx, t, x, y, w, h, label, val, color, zeroed) {
-  ctx.fillStyle = color + (zeroed ? "12" : "1c");
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 2);
-  ctx.fill();
-  ctx.strokeStyle = color + (zeroed ? "25" : "60");
-  ctx.lineWidth = 0.5;
-  ctx.stroke();
-
-  // Left arrow
-  ctx.fillStyle = zeroed ? t.arrowColor + "55" : t.arrowColor + "dd";
-  ctx.font = "6px 'Courier New',monospace";
-  ctx.textAlign = "left";
-  ctx.fillText("<", x + 2, y + h - 2);
-
-  // Right arrow
-  ctx.textAlign = "right";
-  ctx.fillText(">", x + w - 2, y + h - 2);
-
-  // Label top-left
-  ctx.fillStyle = color + (zeroed ? "55" : "88");
-  ctx.font = "5px 'Courier New',monospace";
-  ctx.textAlign = "left";
-  ctx.fillText(label, x + 2, y + 4);
-
-  // Value center
-  ctx.fillStyle = zeroed ? color + "66" : color;
-  ctx.font = "bold 7px 'Courier New',monospace";
-  ctx.textAlign = "center";
-  ctx.fillText(val.toFixed(2), x + w / 2, y + h / 2 + 2);
-  ctx.textAlign = "left";
+// Use DOM text and vector icons, like Director; never scale a text bitmap.
+function mountLoraSurface(node, calcHeight, getTooltipAt) {
+  if (!node.addDOMWidget || node._loraSurface) return;
+  const root = document.createElement("div");
+  root.style.cssText = "width:100%;min-width:0;flex:1;overflow:hidden;";
+  const surface = document.createElement("div");
+  surface.className = "dasiwa-lora-surface";
+  surface.style.cssText = "position:relative;width:100%;font-family:'Courier New',monospace;";
+  root.append(surface);
+  node._loraSurface = surface;
+  const height = () => calcHeight(JSON.parse(node.properties.stack_data).length);
+  let frame = 0;
+  let removedFromGraph = false;
+  const paint = () => {
+    frame = 0;
+    root.style.height = surface.style.height = `${height()}px`;
+    node.drawLoraStack();
+  };
+  const repaint = () => {
+    if (!frame && !removedFromGraph) frame = requestAnimationFrame(paint);
+  };
+  const widget = node.addDOMWidget("lora_stack_ui", "custom", root, {
+    serialize: false, hideOnZoom: false, margin: 0,
+    getMinHeight: height, getMaxHeight: height, getHeight: height,
+  });
+  widget.serialize = false;
+  widget.computeSize = () => [node.size[0], height()];
+  const localPosition = event => {
+    const rect = surface.getBoundingClientRect();
+    return [(event.clientX - rect.left) * node.size[0] / rect.width,
+      (event.clientY - rect.top) * height() / rect.height];
+  };
+  surface.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    node.onMouseDown(event, localPosition(event));
+    repaint();
+  });
+  surface.addEventListener("click", event => {
+    if (event.detail !== 0 || event.target.tagName !== "BUTTON") return;
+    const rect = event.target.getBoundingClientRect();
+    node.onMouseDown(event, localPosition({clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2}));
+    repaint();
+  });
+  surface.addEventListener("pointermove", event => {
+    const position = localPosition(event);
+    surface.title = getTooltipAt(node, position);
+    node.onMouseMove(event, position);
+    const action = loraActionAt(node, position);
+    surface.style.cursor = action ? (action.enabled ? "pointer" : "not-allowed") : "";
+  });
+  surface.addEventListener("pointerleave", () => {
+    surface.title = "";
+    surface.style.cursor = "";
+    node.onMouseLeave();
+  });
+  surface.addEventListener("contextmenu", event => {
+    if (root.closest(".lg-node")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    app.canvas.processContextMenu(node, event);
+  });
+  const dirty = node.setDirtyCanvas;
+  node.setDirtyCanvas = function (...args) {
+    repaint();
+    return dirty?.apply(this, args);
+  };
+  const configure = node.onConfigure;
+  node.onConfigure = function (...args) {
+    const result = configure?.apply(this, args);
+    // Native serialized slots remain canonical, including array-only workflows.
+    if (args[0]?.widgets_values) {
+      for (const name of ["stack_data", "model_type", "use_cache"]) {
+        const value = this.widgets.find(w => w.name === name)?.value;
+        if (value !== undefined) this.properties[name] = value;
+      }
+    }
+    repaint();
+    return result;
+  };
+  const observer = new ResizeObserver(repaint);
+  observer.observe(root);
+  const added = node.onAdded;
+  node.onAdded = function (...args) {
+    const result = added?.apply(this, args);
+    removedFromGraph = false;
+    this._loraSurface = surface;
+    observer.observe(root);
+    repaint();
+    return result;
+  };
+  const removed = node.onRemoved;
+  node.onRemoved = function (...args) {
+    removedFromGraph = true;
+    observer.disconnect();
+    cancelAnimationFrame(frame);
+    frame = 0;
+    if (activeValueEditor?._editorOpts?.node === this) closeValueEditor();
+    this._loraSurface = null;
+    return removed?.apply(this, args);
+  };
+  repaint();
 }
 
 app.registerExtension({
@@ -530,6 +604,8 @@ app.registerExtension({
       this.size = [720, calcHeight(rows.length)];
 
       const hideWidget = widget => {
+        widget.hidden = true;
+        widget.options = { ...(widget.options || {}), hidden: true };
         widget.draw = () => {};
         widget.computeSize = () => [0, -4];
         return widget;
@@ -548,7 +624,11 @@ app.registerExtension({
         this.properties.use_cache = value;
         this.setDirtyCanvas(true);
       });
+      stackWidget.value = this.properties.stack_data;
+      modeWidget.value = this.properties.model_type;
+      cacheWidget.value = this.properties.use_cache;
       this.widgets = [hideWidget(stackWidget), hideWidget(modeWidget), hideWidget(cacheWidget)];
+      mountLoraSurface(this, calcHeight, getTooltipAt);
     };
 
     nodeType.prototype.getExtraMenuOptions = function () {
@@ -579,6 +659,13 @@ app.registerExtension({
         return "";
       }
 
+      const action = loraActionAt(node, local_pos);
+      if (action) {
+        if (!action.enabled) return "Select a LoRA to enable this button";
+        return action.action === "info"
+          ? "Show LoRA info (Civitai, trigger words, images)"
+          : "Clear this slot (does not delete the LoRA file)";
+      }
       const [x, y] = local_pos;
       const W = node.size[0];
       const s = W / 1000;
@@ -611,9 +698,7 @@ app.registerExtension({
         stX: 548 * s, stW: 80 * s,
         vX: 635 * s, vW: 60 * s,
         aX: 702 * s, aW: 60 * s,
-        rX: 770 * s, rW: W - 770 * s - 8,
-        iX: 952 * s, iW: 18 * s,
-        tX: 974 * s, tW: 18 * s,
+        rX: 770 * s, rW: 158 * s,
       };
 
       for (let i = 0; i < data.length; i++) {
@@ -625,8 +710,6 @@ app.registerExtension({
         if (x > C.vX && x < C.vX + C.vW) return CONTROL_DESCRIPTIONS.video;
         if (x > C.aX && x < C.aX + C.aW) return CONTROL_DESCRIPTIONS.audio;
         if (x > C.rX && x < C.rX + C.rW) return CONTROL_DESCRIPTIONS.keys;
-        if (x > C.iX && x < C.iX + C.iW) return "Show LoRA info (Civitai, trigger words, images)";
-        if (x > C.tX && x < C.tX + C.tW) return "Trash this LoRA (set the slot back to None)";
       }
 
       return "";
@@ -634,265 +717,134 @@ app.registerExtension({
 
     nodeType.prototype.onMouseMove = function (_e, local_pos) {
       setCanvasTooltip(getTooltipAt(this, local_pos));
+      const action = loraActionAt(this, local_pos);
+      const hovered = action?.enabled ? `${action.row}:${action.action}` : null;
+      if (this._loraHoveredAction !== hovered) {
+        this._loraHoveredAction = hovered;
+        this.setDirtyCanvas(true);
+      }
       return false;
     };
 
     nodeType.prototype.onMouseLeave = function () {
       setCanvasTooltip("");
+      if (this._loraHoveredAction) {
+        this._loraHoveredAction = null;
+        this.setDirtyCanvas(true);
+      }
       return false;
     };
 
-    nodeType.prototype.onDrawForeground = function (ctx) {
-      if (this.flags.collapsed) return;
+    nodeType.prototype.drawLoraStack = function () {
+      if (this.flags.collapsed || !this._loraSurface) return;
       const data = JSON.parse(this.properties.stack_data);
       const t = THEMES[this.properties.theme || "a"];
-      const W = this.size[0];
-      const H = this.size[1];
+      const W = this.size[0], s = W / 1000;
       sync(this);
       syncModeWidget(this);
       syncCacheWidget(this);
       const modelType = this.properties.model_type || "Basic";
       const audioEnabled = hasSeparatedAudio(modelType);
-
-      const s = W / 1000;
-
-      const BTN_H = 16;
-      const BTN_Y = 40;
-      const ROW_START = BTN_Y + BTN_H + 3;
-      const ROW_H = 28;
-
-      const C = {
-        onX: 8 * s, onW: 50 * s,
-        nmX: 62 * s, nmW: 480 * s,
-        stX: 548 * s, stW: 80 * s,
-        vX: 635 * s, vW: 60 * s,
-        aX: 702 * s, aW: 60 * s,
-        rX: 770 * s, rW: W - 770 * s - 8,
-        iX: 952 * s, iW: 18 * s,
-        tX: 974 * s, tW: 18 * s,
-      };
-
-      const modeW = 150, modeX = (W - modeW) / 2;
-      ctx.fillStyle = t.btnBg;
-      ctx.beginPath();
-      ctx.roundRect(modeX, 20, modeW, 16, 3);
-      ctx.fill();
-      ctx.strokeStyle = t.btnBorder;
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-      ctx.fillStyle = t.btnText;
-      ctx.font = "bold 7px 'Courier New',monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(`MODEL: ${modelType} ▼`, modeX + modeW / 2, 30);
-      ctx.textAlign = "left";
-
-      // Theme button
-      const btnW = 110, btnX = (W - btnW) / 2;
-      const allW = 40, allX = btnX - allW - 4;
-      const allEnabled = data.every(row => row.on);
-      ctx.fillStyle = t.btnBg;
-      ctx.beginPath();
-      ctx.roundRect(allX, BTN_Y, allW, BTN_H, 3);
-      ctx.fill();
-      ctx.strokeStyle = t.btnBorder;
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-      ctx.fillStyle = t.btnText;
-      ctx.font = "bold 7px 'Courier New',monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(allEnabled ? "ALL✓" : "ALL", allX + allW / 2, BTN_Y + 10);
-      ctx.textAlign = "left";
-      ctx.fillStyle = t.btnBg;
-      ctx.beginPath();
-      ctx.roundRect(btnX, BTN_Y, btnW, BTN_H, 3);
-      ctx.fill();
-      ctx.strokeStyle = t.btnBorder;
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-      ctx.fillStyle = t.btnText;
-      ctx.font = "bold 7px 'Courier New',monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(`⬡ THEME: ${t.name} ▶`, btnX + btnW / 2, BTN_Y + 10);
-      ctx.textAlign = "left";
-
-      // Cache toggle (opt-in, default off)
-      const cacheW = 56, cacheX = allX - cacheW - 4;
-      ctx.fillStyle = this.properties.use_cache ? t.onColor + "22" : t.btnBg;
-      ctx.beginPath();
-      ctx.roundRect(cacheX, BTN_Y, cacheW, BTN_H, 3);
-      ctx.fill();
-      ctx.strokeStyle = this.properties.use_cache ? t.onColor : t.arrowColor;
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-      ctx.fillStyle = this.properties.use_cache ? t.onColor : t.arrowColor;
-      ctx.font = "bold 7px 'Courier New',monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(this.properties.use_cache ? "⚡ CACHE ✓" : "⚡ CACHE", cacheX + cacheW / 2, BTN_Y + 10);
-      ctx.textAlign = "left";
-
-      // + button
-      const plusX = btnX + btnW + 4;
-      ctx.fillStyle = t.btnBg;
-      ctx.beginPath();
-      ctx.roundRect(plusX, BTN_Y, BTN_H, BTN_H, 3);
-      ctx.fill();
-      ctx.strokeStyle = t.btnBorder;
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-      ctx.fillStyle = t.btnText;
-      ctx.font = "bold 11px 'Courier New',monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("+", plusX + BTN_H / 2, BTN_Y + 11);
-      ctx.textAlign = "left";
-
-      // - button
-      if (data.length > 1) {
-        const minusX = plusX + BTN_H + 2;
-        ctx.fillStyle = t.btnBg;
-        ctx.beginPath();
-        ctx.roundRect(minusX, BTN_Y, BTN_H, BTN_H, 3);
-        ctx.fill();
-        ctx.strokeStyle = "#f4433655";
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-        ctx.fillStyle = "#f44336cc";
-        ctx.font = "bold 11px 'Courier New',monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("−", minusX + BTN_H / 2, BTN_Y + 11);
-        ctx.textAlign = "left";
-      }
-
-      // Clear button -- resets every current row to None / 1.00, keeps row count
-      const clearW = 36;
-      const clearX = (data.length > 1 ? plusX + BTN_H + 2 + BTN_H : plusX + BTN_H) + 4;
-      ctx.fillStyle = "#f4433622";
-      ctx.beginPath();
-      ctx.roundRect(clearX, BTN_Y, clearW, BTN_H, 3);
-      ctx.fill();
-      ctx.strokeStyle = "#f44336aa";
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-      ctx.fillStyle = "#ffb3adcc";
-      ctx.font = "bold 8px 'Courier New',monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("Clear", clearX + clearW / 2, BTN_Y + 11);
-      ctx.textAlign = "left";
-
-      // Divider
-      ctx.strokeStyle = t.divider;
-      ctx.lineWidth = 0.3;
-      ctx.beginPath();
-      ctx.moveTo(4, ROW_START - 1);
-      ctx.lineTo(W - 4, ROW_START - 1);
-      ctx.stroke();
-
-      // Rows
-      for (let i = 0; i < data.length; i++) {
-        const ry = ROW_START + i * ROW_H;
-        const row = data[i];
-        const str = row.str ?? 1.0;
-        const vs = row.vs ?? 1.0;
-        const as_ = row.as ?? 1.0;
-        const pH = Math.max(ROW_H - 4, 14);
-        const pY = ry + (ROW_H - pH) / 2;
-
-        if (t.wood) {
-          drawWoodRow(ctx, 4, ry, W - 8, ROW_H - 1, i);
-        } else {
-          ctx.fillStyle = i % 2 === 0 ? t.rowOdd : t.rowEven;
-          ctx.fillRect(4, ry, W - 8, ROW_H - 1);
+      const surface = this._loraSurface;
+      const focusedIndex = [...surface.querySelectorAll("button")].indexOf(document.activeElement);
+      surface.replaceChildren();
+      const layer = document.createElement("div");
+      layer.style.cssText = `position:relative;width:${W}px;height:100%;transform-origin:0 0;transform:scaleX(${surface.clientWidth / W})`;
+      surface.append(layer);
+      const box = (tag, text, x, y, w, h, color, background, border, font = 8) => {
+        const el = document.createElement(tag);
+        el.textContent = text;
+        el.style.cssText = `position:absolute;box-sizing:border-box;left:${x}px;top:${y}px;width:${w}px;height:${h}px;` +
+          `margin:0;padding:0 2px;overflow:hidden;white-space:nowrap;font:${font}px 'Courier New',monospace;` +
+          `line-height:${h - 2}px;color:${color};background:${background};border:1px solid ${border};border-radius:3px;`;
+        if (tag === "button") {
+          el.type = "button";
+          el.style.cursor = "pointer";
+          el.title = getTooltipAt(this, [x + w / 2, y + h / 2]);
         }
-
-        ctx.font = "bold 8px 'Courier New',monospace";
-        ctx.fillStyle = row.on ? t.onColor : t.offColor;
-        ctx.fillText(row.on ? "✔" : "✖", C.onX, ry + ROW_H / 2 + 2);
-
-        ctx.font = "8px 'Courier New',monospace";
-        ctx.fillStyle = row.lora === "None" ? t.nameEmpty : t.nameLoaded;
-        const nm = row.lora === "None" ? "None"
-          : row.lora.split(/[\\\/]/).pop().replace(/\.safetensors$/i, "").substring(0, 48);
-        ctx.fillText(nm, C.nmX, ry + ROW_H / 2 + 2);
-
-        drawPill(ctx, t, C.stX, pY, C.stW, pH, "STR", str, t.strColor, str === 0);
-        drawPill(ctx, t, C.vX, pY, C.vW, pH, "VIS", vs, t.vColor, vs === 0);
-        drawPill(ctx, t, C.aX, pY, C.aW, pH, "A", as_, t.aColor, !audioEnabled || as_ === 0);
-
-        if (!audioEnabled) {
-          ctx.font = "6px 'Courier New',monospace";
-          ctx.fillStyle = t.nameEmpty;
-          ctx.fillText(
-            "Full LoRA map",
-            C.rX, ry + ROW_H / 2 + 2,
-          );
-        } else if (row.lora !== "None" && keyCache[row.lora]) {
-          const { v, a } = keyCache[row.lora];
-          ctx.font = "6px 'Courier New',monospace";
-          ctx.fillStyle = t.ratioV;
-          ctx.fillText(`V:${v}`, C.rX, ry + ROW_H / 2 - 2);
-          ctx.fillStyle = t.ratioA;
-          ctx.fillText(`A:${a}`, C.rX, ry + ROW_H / 2 + 5);
-        } else if (row.lora !== "None") {
-          ctx.font = "6px 'Courier New',monospace";
-          ctx.fillStyle = t.nameEmpty;
-          ctx.textAlign = "center";
-          ctx.fillText("…", C.rX + C.rW / 2, ry + ROW_H / 2 + 1);
-          ctx.textAlign = "left";
-          if (!keyCache[row.lora + "_p"]) {
+        layer.append(el);
+        return el;
+      };
+      const button = (text, x, y, w, color = t.btnText, background = t.btnBg, border = t.btnBorder, h = 16) =>
+        box("button", text, x, y, w, h, color, background, border);
+      const btnX = (W - 110) / 2, allX = btnX - 44, plusX = btnX + 114;
+      button(`MODEL: ${modelType} ▼`, (W - 150) / 2, 20, 150);
+      button(data.every(row => row.on) ? "ALL✓" : "ALL", allX, 40, 40);
+      button(`⬡ THEME: ${t.name} ▶`, btnX, 40, 110);
+      button(this.properties.use_cache ? "⚡ CACHE ✓" : "⚡ CACHE", allX - 60, 40, 56,
+        this.properties.use_cache ? t.onColor : t.arrowColor,
+        this.properties.use_cache ? t.onColor + "22" : t.btnBg);
+      button("+", plusX, 40, 16);
+      if (data.length > 1) button("−", plusX + 18, 40, 16, "#f44336cc", t.btnBg, "#f4433655");
+      button("Clear", plusX + (data.length > 1 ? 38 : 20), 40, 36, "#ffb3adcc", "#f4433622", "#f44336aa");
+      box("div", "", 4, 58, W - 8, 1, t.divider, t.divider, "transparent");
+      for (let i = 0; i < data.length; i++) {
+        const row = data[i], y = 59 + i * 28, pY = y + 2;
+        box("div", "", 4, y, W - 8, 27, t.btnText,
+          t.wood ? (i % 2 ? "#321f0a" : "#2c1f0e") : (i % 2 ? t.rowEven : t.rowOdd), "transparent");
+        button(row.on ? "✔" : "✖", 8 * s, pY, 50 * s, row.on ? t.onColor : t.offColor, "transparent", "transparent", 24);
+        const name = row.lora === "None" ? "None" : row.lora.split(/[\\\/]/).pop().replace(/\.safetensors$/i, "");
+        const picker = button(name, 62 * s, pY, 480 * s, row.lora === "None" ? t.nameEmpty : t.nameLoaded, "transparent", "transparent", 24);
+        picker.style.textAlign = "left";
+        for (const [label, value, x, w, color, zeroed] of [
+          ["STR", row.str ?? 1, 548, 80, t.strColor, row.str === 0],
+          ["VIS", row.vs ?? 1, 635, 60, t.vColor, row.vs === 0],
+          ["A", row.as ?? 1, 702, 60, t.aColor, !audioEnabled || row.as === 0],
+        ]) {
+          const pill = button("", x * s, pY, w * s, zeroed ? color + "66" : color,
+            color + (zeroed ? "12" : "1c"), color + (zeroed ? "25" : "60"), 24);
+          const caption = document.createElement("span");
+          caption.textContent = label;
+          caption.style.cssText = "position:absolute;top:0;left:2px;font-size:5px;line-height:6px;pointer-events:none";
+          const valueText = document.createElement("span");
+          valueText.textContent = value.toFixed(2);
+          valueText.style.cssText = "display:block;padding-top:6px;font-size:7px;font-weight:bold;pointer-events:none";
+          pill.append(caption, valueText);
+          for (const [arrow, side] of [["<", "left"], [">", "right"]]) {
+            const span = document.createElement("span");
+            span.textContent = arrow;
+            span.style.cssText = `position:absolute;bottom:1px;${side}:1px;font-size:6px;line-height:7px;pointer-events:none`;
+            pill.append(span);
+          }
+        }
+        let counts = "Full LoRA map";
+        if (audioEnabled) {
+          counts = row.lora === "None" ? "" : "…";
+          if (row.lora !== "None" && keyCache[row.lora]) {
+            const {v, a} = keyCache[row.lora];
+            counts = `V:${v}  A:${a}`;
+          } else if (row.lora !== "None" && !keyCache[row.lora + "_p"]) {
             keyCache[row.lora + "_p"] = true;
             fetch(`/dasiwa/ltx2/keycounts?lora=${encodeURIComponent(row.lora)}&model_type=${encodeURIComponent(modelType)}`)
               .then(r => r.json())
-              .then(d => { keyCache[row.lora] = { v: d.v, a: d.a }; app.graph.setDirtyCanvas(true); })
-              .catch(() => { keyCache[row.lora] = { v: "?", a: "?" }; });
+              .then(d => { keyCache[row.lora] = {v: d.v, a: d.a}; this.setDirtyCanvas(true); })
+              .catch(() => { keyCache[row.lora] = {v: "?", a: "?"}; this.setDirtyCanvas(true); });
           }
         }
-
-        // Info button (row right edge): drawn circle + "i"; opens the
-        // Civitai/trigger-words panel.
-        {
-          const infoCol = row.lora !== "None" ? t.strColor + "AA" : t.nameEmpty;
-          const cx = C.iX + C.iW / 2, cy = ry + ROW_H / 2;
-          const r = 8.5 * s;
-          ctx.strokeStyle = infoCol;
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          ctx.arc(cx, cy, r, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.fillStyle = infoCol;
-          ctx.font = "bold " + Math.max(4, Math.round(9 * s)) + "px 'Courier New',monospace";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText("i", cx, cy + 0.5 * s);
-          ctx.textBaseline = "alphabetic";
-          ctx.textAlign = "left";
-        }
-
-        // Trash button (right of info): drawn trash-can shape; resets this
-        // slot back to "None".
-        {
-          const trCol = row.lora !== "None" ? t.offColor + "CC" : t.nameEmpty;
-          const cx = C.tX + C.tW / 2, cy = ry + ROW_H / 2;
-          ctx.strokeStyle = trCol;
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          // lid + handle
-          ctx.moveTo(cx - 5.8 * s, cy - 5 * s);
-          ctx.lineTo(cx + 5.8 * s, cy - 5 * s);
-          ctx.moveTo(cx, cy - 6.4 * s);
-          ctx.lineTo(cx, cy - 5 * s);
-          // body
-          ctx.moveTo(cx - 4.4 * s, cy - 2.9 * s);
-          ctx.lineTo(cx + 4.4 * s, cy - 2.9 * s);
-          ctx.lineTo(cx + 3.2 * s, cy + 5.8 * s);
-          ctx.lineTo(cx - 3.2 * s, cy + 5.8 * s);
-          ctx.closePath();
-          // ribs
-          ctx.moveTo(cx - 1.5 * s, cy - 1.6 * s);
-          ctx.lineTo(cx - 1 * s, cy + 3.8 * s);
-          ctx.moveTo(cx + 1.5 * s, cy - 1.6 * s);
-          ctx.lineTo(cx + 1 * s, cy + 3.8 * s);
-          ctx.stroke();
+        box("div", counts, 770 * s, pY, 158 * s, 24, t.nameEmpty, "transparent", "transparent", 6);
+        for (const [action, x] of [["info", 934], ["trash", 966]]) {
+          const enabled = row.lora !== "None", hovered = enabled && this._loraHoveredAction === `${i}:${action}`;
+          const color = enabled ? (action === "info" ? t.strColor : t.offColor) : t.arrowColor;
+          const control = button("", x * s, pY, 26 * s, color,
+            enabled ? color + (hovered ? "40" : "18") : t.btnBg,
+            enabled ? color + (hovered ? "FF" : "99") : t.arrowColor, 24);
+          control.style.padding = "0";
+          control.style.cursor = enabled ? "pointer" : "not-allowed";
+          control.dataset.action = action;
+          control.disabled = !enabled;
+          control.setAttribute("aria-label", action === "info" ? "Show LoRA info" : "Clear LoRA slot");
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("viewBox", "-11 -12 22 24");
+          svg.style.cssText = "width:100%;height:100%;pointer-events:none";
+          // Fixed paths only; model filenames and other dynamic text use textContent.
+          svg.innerHTML = action === "info"
+            ? '<circle r="6" fill="none" stroke="currentColor"/><path d="M0 -1V3" stroke="currentColor"/><circle cy="-3.5" r=".8" fill="currentColor"/>'
+            : '<path d="M-5 -4H5 M-2 -4V-6H2V-4 M-4 -1L-3 6H3L4 -1 M-1 0V3 M1 0V3" fill="none" stroke="currentColor"/>';
+          svg.setAttribute("stroke-width", "1.4");
+          control.append(svg);
         }
       }
+      if (focusedIndex >= 0) surface.querySelectorAll("button")[focusedIndex]?.focus({preventScroll: true});
     };
 
     nodeType.prototype.onMouseDown = function (e, local_pos) {
@@ -990,26 +942,24 @@ app.registerExtension({
           stX: 548 * s, stW: 80 * s,
           vX: 635 * s, vW: 60 * s,
           aX: 702 * s, aW: 60 * s,
-          iX: 952 * s, iW: 18 * s,
-          tX: 974 * s, tW: 18 * s,
       };
 
       for (let i = 0; i < data.length; i++) {
         const ry = ROW_START + i * ROW_H;
         if (y < ry || y > ry + ROW_H) continue;
 
-        // Info glyph (row right edge)
-        if (x > C.iX && x < C.iX + C.iW && data[i].lora !== "None") {
-          openLoraInfo(data[i].lora, t);
-          return true;
-        }
-
-        // Trash button (right of info): reset this slot back to "None".
-        if (x > C.tX && x < C.tX + C.tW && data[i].lora !== "None") {
-          data[i].lora = "None";
-          this.properties.stack_data = JSON.stringify(data);
-          sync(this);
-          this.setDirtyCanvas(true);
+        const action = loraActionAt(this, local_pos);
+        if (action) {
+          if (!action.enabled) return true;
+          if (action.action === "info") {
+            openLoraInfo(data[i].lora, t);
+          } else {
+            data[i].lora = "None";
+            this.properties.stack_data = JSON.stringify(data);
+            this._loraHoveredAction = null;
+            sync(this);
+            this.setDirtyCanvas(true);
+          }
           return true;
         }
 
