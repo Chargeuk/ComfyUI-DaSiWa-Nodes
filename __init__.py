@@ -1,5 +1,7 @@
 if __package__:
     from server import PromptServer
+    # Keep the Kitchen attention node ID used by installed workflows.
+    from .nodes.nodes_comfy_kitchen_attention import PathchComfyKitchenAttentionDaSiWa
     from .nodes.nodes_scaling import DaSiWa_ResolutionScaleCalculator, DaSiWa_TorchResize
     from .nodes.nodes_status_switch import DaSiWa_NodeStatusSwitch
     from .nodes.nodes_rtx_upscaler_refiner import DaSiWa_RTX_UpscalerRefiner
@@ -38,6 +40,7 @@ if __package__:
     from .nodes.helper_logging import log_startup_summary
 
     NODE_CLASS_MAPPINGS = {
+        "PathchComfyKitchenAttentionDaSiWa": PathchComfyKitchenAttentionDaSiWa,
         "DaSiWa_ResolutionScaleCalculator": DaSiWa_ResolutionScaleCalculator,
         "DaSiWa_TorchResize": DaSiWa_TorchResize,
         "DaSiWa_NodeStatusSwitch": DaSiWa_NodeStatusSwitch,
@@ -76,6 +79,7 @@ if __package__:
     }
 
     NODE_DISPLAY_NAME_MAPPINGS = {
+        "PathchComfyKitchenAttentionDaSiWa": "Patch Comfy Kitchen Attention",
         "DaSiWa_ResolutionScaleCalculator": "DaSiWa Resolution Scale Calculator",
         "DaSiWa_TorchResize": "DaSiWa Torch Resize",
         "DaSiWa_NodeStatusSwitch": "DaSiWa Node Status Switch",
