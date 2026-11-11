@@ -124,10 +124,19 @@ One `IMAGE` batch in, one `IMAGE` batch out. Choose native **RIFE / FILM** (defa
 - Bidirectional pair interpolation, eased overlap morphing and bounded local color correction; original middle frames remain unchanged.
 - RIFE/FILM selects a native safetensors checkpoint from `models/frame_interpolation/`. RTX uses NVIDIA VFX without that checkpoint, with LOW/MEDIUM/HIGH quality (HIGH default) and a CUDA device selector.
 - `exact_endpoint` is off by default for continuous cyclic playback; enable it only when identical first/last pixels are required.
-- Native interpolation needs no additional dependency; RTX requires a supported NVIDIA GPU and `nvidia-vfx` with VideoFrameGeneration. This does not multiply the whole video's FPS. Output duration can change; audio must be aligned downstream.
+- Native interpolation needs no additional dependency; RTX requires a supported NVIDIA GPU and `nvidia-vfx` with VideoFrameGeneration. This does not multiply the whole video's FPS. Output duration can change; connect `audio` + `frame_rate` to get matching looped audio (optional *Beat-aware* loop length).
 - Visible seams may remain with incompatible motion or scene changes; residual temporal discontinuities are logged.
 
 [Usage, model compatibility and references →](docs/seamless_loop.md)
+
+### 🌀 MiniMax H3 De-rope
+
+Fixes H3's fast-motion smear after generation: the baseline latent's own jerk profile picks the hot spans, those frames are held, the slowed clip is re-rendered at partial denoise and the original clock is recovered by exact frame selection. Two nodes (*De-rope Prepare*, *De-rope Recover*), ported from MATLOWAI's MAINodes Motion Lab with bit-identical hold planning.
+
+- **Optional static-background preservation (default OFF):** connect original decoded frames to Recover's `baseline`, then enable `keep_background`. Motion and meaningful pose changes use the second pass; static regions retain baseline detail. Broad camera/scene changes fall back to full de-rope.
+- **Unchanged timing/audio:** exact frame selection and the existing IMAGE output; combine with the original baseline audio. No extra model or dependency.
+
+[Usage, presets and second-pass settings →](docs/minimax_h3_derope.md)
 
 ---
 
@@ -388,6 +397,7 @@ Bridge any string/text node through **DaSiWa Random String Picker** to randomize
 - **Dual style:** Switch globally between Booru and Natural Language source keys.
 - **Compact selector:** Collapsible categories expose subject checkboxes, weights, deterministic live selections, and right-aligned selected-subject counters that remain visible while a category is collapsed.
 - **Fast inspiration:** **Random Select** replaces the current selection with 1–10 secure-random available Preset/Wildcard subjects.
+- **Prompt variables:** `$name` / `${name}` tokens in your connected positive/negative input text resolve from your own `variables_json` library — seed-deterministic, one independent pick per occurrence, `$$` for a literal dollar, unknown names untouched, and `variable_selections` pins any single occurrence.
 - **Reproducible rerolls:** Seed plus the stored reroll value reproduce every `{A|B|C}` choice; **New Picks** only advances the reroll value, while **New picks on every queue** opts into fresh output for each queue—including Preview as Text selected-output execution.
 - **Weighted, bounded prompts:** Non-1.0 enabled subjects use ComfyUI emphasis syntax. Each positive/negative prompt independently removes complete lowest-weight subjects until it meets the token budget.
 - **Optional prompt prefixes:** Connect `positive_input` or `negative_input` to prepend an existing prompt to that generated side.

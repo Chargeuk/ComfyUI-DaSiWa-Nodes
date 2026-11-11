@@ -87,7 +87,9 @@ def validate_references(references):
                 if not isinstance(value, str) or len(value) > limit:
                     raise ForgeError("bad_references", f"Reference {key} must be text of at most {limit} characters.")
                 total += len(value)
-        if ref.get("role") == "custom" and not ref.get("instructions", "").strip():
+        # A labelled Custom picture can go without a note: the idea says what
+        # it is for (h3_forge checks there is one).
+        if ref.get("role") == "custom" and not ref.get("instructions", "").strip() and not (ref.get("easy_role") or ref.get("picture_kinds")):
             raise ForgeError("bad_references", "Custom references need nonblank reference instructions.")
         boxes = ref.get("boxes")
         if boxes is not None and (not isinstance(boxes, list) or len(boxes) > MAX_BOXES or not all(
@@ -171,6 +173,8 @@ def format_references(references, mode):
                 role = ref.get("role")
                 note = (_BASE_NOTE.get(role) if base_mode else None) or _ROLE_NOTE.get(role)
                 bits.append(note(tag) if note else f"role: {role or 'UNLABELLED'}")
+                if role == "custom" and not ref.get("instructions"):
+                    bits[-1] = f"custom — use {tag} for what the brief says it is, not as a character of its own"
                 if base_mode and role in ("pose", "custom"):
                     bits[-1] = f"endpoint — {tag} remains the mode's actual target frame; reference intent cannot override first/last-frame alignment"
             length = _format_duration(ref.get("duration_seconds"))
@@ -217,6 +221,22 @@ def scale_detail_rule(rule, duration):
     out = _WORD_RANGE.sub(scaled, rule, count=1)
     # Level 7 calls its range the guide's own, which stops being true once scaled.
     return out.replace(", the reference guide's own range", f" for this {float(duration):g}-second clip")
+
+
+def detail_share(rule, shots):
+    """Each shot's share of the detail rule's word range, or "".
+
+    The ladder gives one range for the whole clip and nothing says how to split
+    it, so with several shots the model stopped at a sentence or two each.
+    Detail 8 x 4 shots on a 27B, PromptForge 22 Oct 2026: 274 and 234 words
+    without this, 388 and 393 with it.
+    """
+    n = shot_count(shots)
+    found = _WORD_RANGE.search(str(rule or ""))
+    if not found or not n or n < 2:
+        return ""
+    lo, hi = (round(int(x) / n) for x in found.groups())
+    return f" With {n} shots that is about {lo}-{hi} words in each shot: every shot gets its full share, the last as much as the first."
 
 
 def output_canvas_context(canvas):
@@ -274,7 +294,8 @@ def build_user_message(bundle, brief, mode, duration, detail, creativity, refere
     entry = table.get(str(detail)) or table.get(str(bundle["default_detail"]))
     if entry and entry.get("rule"):
         level = detail if str(detail) in table else bundle["default_detail"]
-        lines.append(f"Detail level {level} of {len(table)} - {entry.get('label', level)}. {scale_detail_rule(entry['rule'], duration)}")
+        rule = scale_detail_rule(entry["rule"], duration)
+        lines.append(f"Detail level {level} of {len(table)} - {entry.get('label', level)}. {rule}{detail_share(rule, shots)}")
 
     if references and cast is not None:
         # Labelled pictures are in the cast block; everything else keeps its
@@ -354,7 +375,8 @@ def parse_segments(text, expected):
         label = by_field.get(heading, heading)
         if label in segments:
             label = heading
-        segments[label] = raw[m.end():end].strip()
+        # A bare === line is a delimiter's leftovers, never part of a section.
+        segments[label] = re.sub(r"^\s*={3,}\s*$", "", raw[m.end():end], flags=re.M).strip()
     if "Refused" in segments:
         raise ForgeError("refused", f"The model refused: {segments['Refused']}", raw)
     missing = [label for label in expected if label not in segments]
@@ -871,11 +893,14 @@ def easy_lines(cast, sees_pictures=False, cards=None):
         lines.append((f"- <Picture {f['picture']}> is the first frame: [Shot 1] opens on it exactly" if f["which"] == "first"
                       else f"- <Picture {f['picture']}> is the last frame: the final shot ends on it exactly") + _tail([f["ref"]]))
     for u in cast["uses"]:
-        stance = cards.get(f"<Picture {u['picture']}>") if u["which"] == "pose" else None
+        seen = cards.get(f"<Picture {u['picture']}>")
+        noted = str(u["ref"].get("instructions") or "").strip()
         lines.append((f"- <Picture {u['picture']}> gives a pose only{pose_takers(cast, u)}: stance, limb position and gesture; not who anyone is, "
                       "their clothes or the background" if u["which"] == "pose"
-                      else f"- <Picture {u['picture']}> is used only as its instructions say") + _tail([u["ref"]])
-                     + (f" · pose: {stance}" if stance else ""))
+                      else f"- <Picture {u['picture']}> is used only as its instructions say, not as a character of its own" if noted
+                      else f"- <Picture {u['picture']}> is a general reference: use it for what the brief says it is "
+                           "(a body part, an object, an action, a detail), not as a character of its own") + _tail([u["ref"]])
+                     + (f" · {'pose' if u['which'] == 'pose' else 'shows'}: {seen}" if seen else ""))
     if cards:
         lines.append("Explicit Idea/Shot changes override conflicting looks or pose traits; all unchanged traits remain the reference baseline.")
     return lines
@@ -1119,7 +1144,10 @@ def easy_segments(cast, segments, description_targets=None, cards=None):
         definitions.append((f"<Picture {u['picture']}> gives the pose only{pose_takers(cast, u)}: stance, limb position and gesture, "
                             "not identity, clothing or background." + (f" {said}" if said else "")
                             + described(f"<Picture {u['picture']}>"))
-                           if u["which"] == "pose" else f"<Picture {u['picture']}>: {said}")
+                           if u["which"] == "pose"
+                           else (f"<Picture {u['picture']}>: {said}" if said
+                                 else f"<Picture {u['picture']}> is the reference used for what the detailed description takes from it.")
+                           + described(f"<Picture {u['picture']}>"))
     segments["Subject definitions"] = "\n\n".join(definitions)
     segments["Retention analysis"] = "\n".join(retention)
     return warnings + citation_warnings

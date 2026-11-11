@@ -2,9 +2,33 @@
 
 Collection-wide news and change history for the DaSiWa Custom Nodes — one place to see what changed across every node. Per-node deep dives (UI guides, wiring, options) stay in their own docs, linked from the README.
 
-This changelog covers **2026-07-05 → 2026-10-21**. Older history lives in the git log. Entries within each section are listed **newest first**.
+This changelog covers **2026-07-05 → 2026-11-11**. Older history lives in the git log. Entries within each section are listed **newest first**.
 
 ## News
+
+- **De-rope Recover: optional static-background preservation (0.5.45):** append-only `baseline` IMAGE and `keep_background` BOOLEAN (default OFF) retain original static detail around baseline-neighbor motion and meaningful structural second-pass changes. Spatial dilation/feathering, a three-frame union and gradual mask release protect moved limbs without treating normal VAE softening as motion. Broad camera/scene changes use the full second pass. ON validates matching finite [0,1] RGB/RGBA frames; OFF remains exact legacy recovery and ignores baseline. CPU frame loops bound scratch memory, check ComfyUI interruption and log coverage. No model/dependency or audio change. [Wiring and limits](minimax_h3_derope.md#optional-static-background-preservation)
+
+- **MiniMax H3 De-rope (0.5.43):** two new nodes, *De-rope Prepare* and *De-rope Recover*, fix H3's smear on whip-fast motion after generation. Prepare reads the baseline latent's jerk profile, holds the frames of hot spans, encodes the slowed clip plus the baseline audio stretched onto the same clock, and returns the AV latent for a partial-denoise second pass; Recover drops the held frames by exact selection. Ported from MATLOWAI's MAINodes Motion Lab (GPL-3.0) and condensed from five nodes to two (the truncated schedule is core `BasicScheduler` → `SplitSigmasDenoise`); hold planning and audio stretching are bit-identical to the original. [Docs](minimax_h3_derope.md)
+
+- **System Monitor: AMD VRAM on Linux (0.5.44):** with an AMD GPU on Linux the top-bar meter showed utilization and temperature but no VRAM — `memory_used`/`memory_total`/`memory_percent` were null. The `rocm-smi` call asked only for `--showmemuse`, which returns percentage fields, so the used/total lookups found nothing; it also assumed MiB while `--showmeminfo vram` reports bytes. The call now includes `--showmeminfo vram` and the values are used as reported. Values match `mem_info_vram_used`/`mem_info_vram_total` under `/sys/class/drm/card*/device/`. Windows (ADLX) and NVIDIA paths untouched. (Issue #95, reported for RX 9070 XT / ROCm 10.)
+
+- **Continuity Publish Export: segment audio tail padding accepted (0.5.42):** in *New segment only*, Publish Export re-reads the exported file and checks the audio length against the exact global sample boundary. AAC and Opus always pad the final codec frame (up to 1024/960 samples), and WebM/MKV carry no audio stream duration to signal that padding, so the check failed with *Segment audio ends at N samples; expected M* even for intact exports — segment mode only, since Full timeline runs no such check. Padding shorter than one codec frame is now accepted when the container cannot declare a duration; real mismatches (wrong trimming, retime, too-long audio) still fail. (Reported for MKV/WebM exports.)
+
+- **Seamless Loop: audio follows the loop (0.5.41):** H3/LTX clips carry generated audio, but the loop trims frames, so picture and sound drifted apart and the sound jumped at the wrap. Seamless Loop now has an optional `audio` input/output plus `frame_rate`: the audio is cut and crossfaded with exactly the frame mapping of the video (frame *f* → sample `round(f × sample_rate / fps)`, output length exact to the sample), the tail→head transition uses an equal-power crossfade, and the wrap is sample-continuous. `audio_loop` *Beat-aware* (opt-in) estimates the tempo and prefers a loop spanning whole beats when its visual cost stays within 1.25× of the best; with an unclear tempo it falls back to *Crossfade* and logs why. Without audio the node behaves exactly as before; the second output is empty.
+
+- **Director Image Inpaint: stretched keyframe no longer silent (0.5.40):** with a custom canvas aspect different from the keyframe and Input scaling *Auto* (the default) or *Off*, native H3 treats the first frame as a geometry anchor and plain-stretches it to the canvas, so the output came out distorted with no warning (reported for 16:9 → 1:1). The Director now logs the keyframe/canvas mismatch and names the fixes: Auto aspect, or Input scaling *Fill and crop* / *Fit and pad*. Behavior is unchanged; REF2VA was never affected since its images are references, not geometry anchors.
+
+- **Wildcard & Preset Prompt Builder: prompt variables (0.5.39):** `positive_input`/`negative_input` text can now carry `$name` / `${name}` tokens resolved from your own `variables_json` library (`{"hairstyle": ["bob cut", "ponytail"]}`) before the generated presets are prepended. Every occurrence picks independently and follows the node seed (`$$` = literal `$`, unknown names stay in the text); `variable_selections` pins one occurrence (`{"hairstyle:0": "ponytail"}`) and survives seed changes, while *New picks on every queue* re-rolls presets only. The `/build` route accepts the same fields and additionally returns `positive_base`/`negative_base` — the resolved input text without presets — so DEAS previews exactly what the graph will render.
+
+- **Metadata Image Saver: no more `*_not_found` placeholders (0.5.38):** when a prompt, sampler, seed, model or other field could not be detected, the embedded A1111 `parameters` text carried sentinels like `negative_prompt_not_found`, which prompt-reuse tools (DEAS, Civitai uploaders) refilled into the fields as if they were real prompts. Undetected fields are now embedded as empty values; readers treat them as absent. Images saved by earlier versions keep their sentinels (DEAS already ignores them on reuse).
+
+- **Enhanced Video Combine: VHS audio accepted (0.5.37):** VideoHelperSuite's *Load Video (Path)* returns audio as a `LazyAudioMap` that exposes `waveform`/`sample_rate` but is not a `dict`, so the node refused it with *audio must be a ComfyUI AUDIO value containing waveform and sample_rate*. Mapping-like audio is now read as a plain dict before validation (contributed in [PR #93](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/93)). The `free_memory_if_needed` RAM estimate still skips such audio, so it under-counts by that one buffer.
+
+- **Join Clips copy duration, Continuity Select Filename, Forge notes and shot share (0.5.36):** with *Copy video without re-encoding*, the last copied video packet kept its source duration (512 ticks at 1/12288 read as 512 frames), so a 34.9 s join reported 56.2 s; every copied packet now lasts one frame ([#89](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/issues/89)). New segment only no longer fails with *Export images derived from, and audio directly from, the same Segment Decode* when Publish Export's filename comes through VHS Select Filename; capture checks the exporter behind such a pass-through ([#90](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/issues/90)). Prompt Forge (contributed in [PR #91](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/91)): when some of a character's pictures carry a note and some none, the un-noted ones describe the look and each noted one lends only its noted thing; with 2–5 shots picked, the detail line names each shot's share of the word range; a stray `===` line no longer lands in a parsed section. Labelled REF2VA **Custom** pictures no longer need a typed note, are passed to the writer as a general reference, and get their own `custom@N` Cast card (contributed in [PR #92](https://github.com/darksidewalker/ComfyUI-DaSiWa-Nodes/pull/92)).
+
+- **RTX Upscaler & Refiner / Frame Generation: no 64 GiB mmap cap (0.5.35):** with `use_mmap` on, an output larger than RAM was refused above a fixed 64 GiB (`Output requires 76.03 GiB, exceeding the 64 GiB disk-backed safety limit`) even on a drive with room for it. The disk-backed output may now use up to 90% of the temp drive's free space; the error names the share and the folder. A DEAS user hit this on a 64 GB RAM machine with a long RTX 2× + frame-generation chain.
+
+- **Continuity Segment Decode: swapped VAE slots named (0.5.34):** a video VAE wired into `audio_vae` (or the audio VAE into `vae`) used to fail deep inside Core with `tuple index out of range`. Segment Decode now checks both slots against Core's MiniMax H3 VAE classes in both output modes and says which VAE belongs where. Every H3 video VAE variant Core loads (stock, int8, LightVAE, the new Sol-H3-VAE) keeps passing; the Director Guide hint now names `minimax_h3_sol_vae_*` too.
 
 - **Enhanced Video Combine: explicit AV1/Auto fix (Git update within 0.5.33):** explicitly choosing AV1 with container Auto now also prefers MP4 (faststart), retaining WebM → MKV as alternatives and the final H.264/MP4 fallback. VP9 and explicit container choices are unchanged. Regression tests cover selection/fallbacks plus real CPU AV1 MP4 encode/decode with and without AAC audio. No version bump.
 
@@ -195,6 +219,15 @@ Quick reference for the version bumps inside this window, newest first:
 
 | Version | Date | Headline |
 |---|---|---|
+| 0.5.45 | 11-11 | De-rope Recover: optional static-background preservation, default OFF; bounded CPU motion/change masks and broad-motion fallback; original audio unchanged |
+| 0.5.41 | 11-09 | Seamless Loop: optional audio in/out, sample-exact trim + equal-power crossfade, opt-in Beat-aware loop length |
+| 0.5.39 | 11-05 | Wildcard & Preset Prompt Builder: `$name` prompt variables (seed-deterministic, per-occurrence pins); `/build` resolves inputs and returns `*_base` |
+| 0.5.38 | 11-03 | Metadata Image Saver: undetected metadata fields embed as empty values, no `*_not_found` sentinels |
+| 0.5.37 | 11-02 | Enhanced Video Combine accepts mapping-like AUDIO (VHS `LazyAudioMap`, PR #93) |
+| 0.5.36 | 11-01 | Join Clips copy: one-frame packet durations; Continuity accepts Select Filename before Publish; Forge note wording, per-shot word share, Custom pictures without a note + Cast card |
+| 0.5.35 | 11-01 | RTX disk-backed (mmap) output: 90% of free temp space instead of a fixed 64 GiB cap |
+| 0.5.34 | 10-30 | Continuity Segment Decode names swapped video/audio VAE slots; Sol-H3-VAE in the hints |
+| 0.5.33 | 10-21 | Enhanced Video Combine Auto outputs AV1 in MP4; Seed Control poller stops with the node |
 | 0.5.32 | 10-19 | New **Tiled Diffusion (Image)** MODEL patch: per-step overlapping-tile sampling for SD/SDXL/Flux-family image models |
 | 0.5.31 | 10-18 | `POST /dasiwa/wildcard-preset-prompt-builder/build`: resolved wildcard prompts for apps outside the graph; Metadata Image Saver model hash cache survives restarts |
 | 0.5.30 | 10-18 | `POST /dasiwa/llm/write`: Prompt Writer dialects on the Forge backends for apps outside the graph |
@@ -387,6 +420,8 @@ Patch Comfy Kitchen Attention was retired in **0.4.68**; the entries below descr
 - **08-01:** adaptive CPU RAM reserve shared with the Watermark compositor.
 
 ### Enhanced Video Combine
+
+- **11-02 (0.5.37):** `audio` accepts mapping-like AUDIO values such as VideoHelperSuite's `LazyAudioMap` (PR #93); the conversion happens before the `waveform`/`sample_rate` check, so plain dict AUDIO is unchanged.
 
 - **10-14 (0.5.18):** Includes fullscreen playback and dependable preview seeking from the post-0.5.16 Git update. The player retains the browser-compatible preview and original download paths; encoding settings are unchanged.
 
